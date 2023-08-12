@@ -1,0 +1,13 @@
+The goal: take a 4K (HDR) movie with high-res luminance information, and transfer the color from an alternate (SDR) cut of the movie on top of that luminance.
+The principle is that the benefit of 4K resolution is mostly in the luminance and not the color - 4K, blu ray, and DVD both use 4:2:0 chroma subsampling
+
+(dvd src https://www.avsforum.com/threads/dvds-and-chroma-subsampling-dvd-faq.125013/)
+(4k blu ray src https://www.projectorcentral.com/chroma-subsampling-explained.htm)
+
+Initial step: take the same frame from 4K SDR and low-res SDR sources, and transfer the colors from the latter to the former.
+
+How to do this?
+
+First step: need to align the two images. 
+This is nontrivial, because even the frame in twotowers_vista_1_00 have a slightly different crop from the 4K to the 480p.
+The 480p screenshot from MPV was 848x360, the 4K screenshot from MPV was 3840x2160 with letterboxing, then 3840x1609 with letterboxing removed, then it's synchronized position in the frame was (9, 4, w: 828, h: 353) approximately.
