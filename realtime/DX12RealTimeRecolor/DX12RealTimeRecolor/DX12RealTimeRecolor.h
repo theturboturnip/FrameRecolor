@@ -7,6 +7,7 @@
 
 #include <array>
 #include <chrono>
+#include <d3d12video.h>
 
 namespace RTR {
     using u32 = uint32_t;
@@ -33,6 +34,7 @@ namespace RTR {
 
     struct DX12State {
         ComPtr<ID3D12Device2> device;
+        ComPtr<ID3D12VideoDevice> videoDevice;
         ComPtr<ID3D12CommandQueue> commandQueue;
 
         // Swapchain and associated configuration

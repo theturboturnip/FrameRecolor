@@ -364,6 +364,19 @@ void dx12_init(bool useWarp) {
         perFrameState[i].backBufferIdx = 0;
     }
 
+    // Get video decode capabilities
+    ComPtr<ID3D12VideoDevice> videoDevice;
+    ThrowIfFailed(d3d12Device2.As(&videoDevice));
+
+    /*ComPtr<ID3D12VideoDecoder> videoDecoder;
+    auto videoDecoderDesc = D3D12_VIDEO_DECODER_DESC {
+        .NodeMask = 0,
+        .Configuration = D3D12_VIDEO_DECODE_CONFIGURATION {
+
+        }
+    };
+    ThrowIfFailed(videoDevice->CreateVideoDecoder(&videoDecoderDesc, IID_PPV_ARGS(&videoDecoder)));*/
+
     g_dx12State = DX12State{
         .device = d3d12Device2,
         .commandQueue = d3d12CommandQueue,

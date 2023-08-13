@@ -381,3 +381,5 @@ paket-files/
 # JetBrains Rider
 .idea/
 *.sln.iml
+/realtime/DX12RealTimeRecolor/*.mp4
+/realtime/DX12RealTimeRecolor/*.mkv
