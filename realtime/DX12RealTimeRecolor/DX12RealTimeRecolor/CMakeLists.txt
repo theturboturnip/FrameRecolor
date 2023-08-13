@@ -4,7 +4,7 @@
 cmake_minimum_required (VERSION 3.8)
 
 # Add source to this project's executable.
-add_executable (DX12RealTimeRecolor "DX12RealTimeRecolor.cpp" "DX12RealTimeRecolor.h")
+add_executable (DX12RealTimeRecolor WIN32 "DX12RealTimeRecolor.cpp" "DX12RealTimeRecolor.h")
 
 # From https://stackoverflow.com/a/48975072/4248422
 target_compile_definitions(DX12RealTimeRecolor PRIVATE "UNICODE" "_UNICODE")
