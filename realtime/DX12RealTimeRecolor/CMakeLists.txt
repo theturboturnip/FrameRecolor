@@ -6,4 +6,5 @@ cmake_minimum_required (VERSION 3.8)
 project ("DX12RealTimeRecolor")
 
 # Include sub-projects.
+add_subdirectory ("DirectX-Headers")
 add_subdirectory ("DX12RealTimeRecolor")

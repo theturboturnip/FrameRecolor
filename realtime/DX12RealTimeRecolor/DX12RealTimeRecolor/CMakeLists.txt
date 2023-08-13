@@ -9,6 +9,7 @@ add_executable (DX12RealTimeRecolor WIN32 "DX12RealTimeRecolor.cpp" "DX12RealTim
 # From https://stackoverflow.com/a/48975072/4248422
 target_compile_definitions(DX12RealTimeRecolor PRIVATE "UNICODE" "_UNICODE")
 target_link_libraries(DX12RealTimeRecolor PRIVATE "d3d12.lib" "dxgi.lib" "d3dcompiler.lib")
+target_include_directories(DX12RealTimeRecolor PRIVATE "${DirectX-Headers_SOURCE_DIR}/include/directx")
 
 file(GLOB _shader "${CMAKE_CURRENT_SOURCE_DIR}/*.hlsl")
 add_custom_command(

@@ -40,8 +40,7 @@ using ComPtr = Microsoft::WRL::ComPtr<T>;
 #include <DirectXMath.h>
 
 // D3D12 extension library.
-// SAMUEL NOTE - Don't want to bother with installing this from https://github.com/microsoft/DirectX-Headers right now.
-//#include <d3dx12.h>
+#include <d3dx12.h>
 
 #include <exception>
 // From DXSampleHelper.h 
@@ -97,13 +96,17 @@ namespace RTR {
         HWND hWnd;
         // Used to remember what the width/height was before we went into fullscreen mode.
         RECT windowSizeWhenWindowed;
+        UINT clientWidth;
+        UINT clientHeight;
     };
 
     struct DX12InflightFrameState {
+        // TODO decouple the backBuffer from these - it's tied to the swapchain
         ComPtr<ID3D12Resource> backBuffer;
         ComPtr<ID3D12CommandAllocator> commandAllocator;
+        ComPtr<ID3D12GraphicsCommandList> commandList; // TODO the tutorial creates only one of these... but they're tied to the commandAllocator!
         // Tracking for "is this frame in-flight?"
-        // If inflight is set, this frame has been passed to the GPU for rendering and we can't use the backbuffer or commandallocator on the CPU.
+        // If inflight is set, this frame has been passed to the GPU for rendering and we can't use it's resources on the CPU.
         // valueForFrameFence is the value the inflightFrameFence will take when this frame is complete, setting inflight to false.
         // valueForFrameFence only has meaning when inflight=true.
         bool inflight;
@@ -117,7 +120,7 @@ namespace RTR {
         // Swapchain and associated configuration
         ComPtr<IDXGISwapChain4> swapchain;
         bool swapchainVsync;
-        bool swapchainTearingSupported; // ?
+        bool swapchainTearingSupported; // "tearing supported" = running on a VRR display
         bool swapchainFullscreen;
 
         // The heap for storing render target descriptors.
@@ -125,13 +128,17 @@ namespace RTR {
         ComPtr<ID3D12DescriptorHeap> renderTargetDescriptorHeap;
         UINT renderTargetDescriptorSize;
 
-        ComPtr<ID3D12CommandList> commandList; // Used for recording commands, we only ever need one at a time
-
         ComPtr<ID3D12Fence> inflightFrameFence;
+        // The value of the inflightFrameFence, which is correlated with perFrameState[N].valueForFrameFence to determine if an inflight frame N has completed.
+        // Different to currentInflightFrame, which is the frame we're currently recording(?)
         u64 inflightFrameFenceValue;
+        // The next value to set perFrameState[N].valueForFrameFence to when it goes inflight.
+        u64 nextFrameFenceValue;
         HANDLE inflightFrameFenceEvent;
 
         DX12InflightFrameState perFrameState[NUM_INFLIGHT_FRAMES];
+        // The index N in perFrameState[N] which we're currently listing commands for.
+        // perFrameState[N] will be the next frame to go inflight.
         UINT currentInflightFrame;
     };
 }
