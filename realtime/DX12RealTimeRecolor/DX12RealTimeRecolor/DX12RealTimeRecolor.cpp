@@ -58,6 +58,9 @@ LRESULT CALLBACK window_message_callback(HWND hWnd, UINT uMsg, WPARAM wParam, LP
     case WM_DESTROY:
         ::PostQuitMessage(0);
         break;
+    case WM_PAINT:
+        g_dx12State.enqueueRenderAndPresentForNextFrame();
+        break;
     }
     return ::DefWindowProc(hWnd, uMsg, wParam, lParam);
 }
@@ -372,14 +375,76 @@ void dx12_init(bool useWarp) {
 
         .renderTargetDescriptorHeap=renderTargetDescriptorHeap,
         .renderTargetDescriptorSize=renderTargetDescriptorSize,
+
         .backBuffers=backBuffers,
+        .perFrameState = perFrameState,
 
         .inflightFrameFence=inflightFrameFence,
         .inflightFrameFenceValue=inflightFrameFenceValue,
         .inflightFrameFenceEvent=inflightFrameFenceEvent,
-
-        .perFrameState=perFrameState,
     };
+}
+
+void DX12State::enqueueRenderAndPresentForNextFrame() {
+    auto frameIndex = swapchain->GetCurrentBackBufferIndex();
+
+    auto backBuffer = backBuffers[frameIndex];
+    auto commandAllocator = perFrameState[frameIndex].commandAllocator;
+    auto commandList = perFrameState[frameIndex].commandList;
+
+    // Wait for this in-flight frame to finish, so we can use the resources
+    cpuWaitForFenceToHaveAtLeastValue(perFrameState[frameIndex].lastFrameFence);
+    // Reset the command allocator and list(?)
+    commandAllocator->Reset();
+    commandList->Reset(commandAllocator.Get(), nullptr);
+    
+    // Enqueue a command to transition the backBuffer from (presented) to (render target)
+    {
+        CD3DX12_RESOURCE_BARRIER barrier = CD3DX12_RESOURCE_BARRIER::Transition(
+            backBuffer.Get(),
+            D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+
+        commandList->ResourceBarrier(1, &barrier);
+    }
+    // Enqueue a command to clear the freshly-transitioned backBuffer
+    {
+        FLOAT clearColor[] = { 0.4f + (0.0006f * (inflightFrameFenceValue % 1000)), 0.6f, 0.9f, 1.0f};
+        CD3DX12_CPU_DESCRIPTOR_HANDLE rtv(
+            renderTargetDescriptorHeap->GetCPUDescriptorHandleForHeapStart(),
+            frameIndex,
+            renderTargetDescriptorSize
+        );
+
+        commandList->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
+    }
+    // Enqueue a command to transition the backBuffer from (render target) to (presentable)
+    {
+        CD3DX12_RESOURCE_BARRIER barrier = CD3DX12_RESOURCE_BARRIER::Transition(
+            backBuffer.Get(),
+            D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+        commandList->ResourceBarrier(1, &barrier);
+    }
+
+    // That's all we can do with a command list. Enqueue those commands.
+    ThrowIfFailed(commandList->Close());
+
+    ID3D12CommandList* const commandLists[] = {
+        commandList.Get()
+    };
+    commandQueue->ExecuteCommandLists(_countof(commandLists), commandLists);
+
+    // Enqueue a command to present the freshly presentable backBuffer.
+    // We don't need to present extra information about the backBuffer
+    // because the swapchain is the one who told us which resource it would pull from next.
+    // It's the swapchain's world, we just live in it.
+    {
+        UINT syncInterval = swapchainVsync ? 1 : 0;
+        UINT presentFlags = (swapchainTearingSupported && !swapchainVsync) ? DXGI_PRESENT_ALLOW_TEARING : 0;
+        ThrowIfFailed(swapchain->Present(syncInterval, presentFlags));
+    }
+
+    // Now we've submitted all the work, enqueue a request to increment the fence once the work is finished.
+    perFrameState[frameIndex].lastFrameFence = incrementFenceFromGPUQueue();
 }
 
 int CALLBACK wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLine, int nCmdShow)
@@ -421,6 +486,9 @@ int CALLBACK wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdL
         {
             ::TranslateMessage(&msg);
             ::DispatchMessage(&msg);
+        }
+        else {
+            g_dx12State.enqueueRenderAndPresentForNextFrame();
         }
     }
 

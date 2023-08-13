@@ -45,7 +45,9 @@ namespace RTR {
         // The size of a render target descriptor is vendor-dependent.
         ComPtr<ID3D12DescriptorHeap> renderTargetDescriptorHeap;
         UINT renderTargetDescriptorSize;
+
         std::array<ComPtr<ID3D12Resource>, NUM_INFLIGHT_FRAMES> backBuffers;
+        std::array<DX12InflightFrameState, NUM_INFLIGHT_FRAMES> perFrameState;
 
         // A fence holds a 64-bit unsigned value that the GPU increments.
         // More precisely, we put commands in the GPU queue to set the fence to specific values.
@@ -59,7 +61,7 @@ namespace RTR {
             ThrowIfFailed(commandQueue->Signal(inflightFrameFence.Get(), fenceValueToRequest));
             return fenceValueToRequest;
         }
-        void cpuWaitForFenceToHaveValue(u64 expectedValue,
+        void cpuWaitForFenceToHaveAtLeastValue(u64 expectedValue,
             std::chrono::milliseconds duration = std::chrono::milliseconds::max()) {
             if (inflightFrameFence->GetCompletedValue() < expectedValue)
             {
@@ -68,11 +70,10 @@ namespace RTR {
             }
         }
 
-        std::array<DX12InflightFrameState, NUM_INFLIGHT_FRAMES> perFrameState;
-
+        void enqueueRenderAndPresentForNextFrame();
         void flush() {
             u64 valueOfFenceWhenAllWorkIsFinished = incrementFenceFromGPUQueue();
-            cpuWaitForFenceToHaveValue(valueOfFenceWhenAllWorkIsFinished);
+            cpuWaitForFenceToHaveAtLeastValue(valueOfFenceWhenAllWorkIsFinished);
         }
     };
 }
