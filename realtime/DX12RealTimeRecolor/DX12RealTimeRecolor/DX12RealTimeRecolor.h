@@ -3,91 +3,10 @@
 
 #pragma once
 
-// Based on https://www.3dgep.com/learning-directx-12-1/
-
-#define WIN32_LEAN_AND_MEAN
-#include <Windows.h>
-#include <strsafe.h> // For StringCchPrintf
-#include <shellapi.h> // For CommandLineToArgvW
-
-// The min/max macros conflict with like-named member functions.
-// Only use std::min and std::max defined in <algorithm>.
-#if defined(min)
-#undef min
-#endif
-
-#if defined(max)
-#undef max
-#endif
-
-// In order to define a function called CreateWindow, the Windows macro needs to
-// be undefined.
-// SAMUEL NOTE - bad practice to make functions that overlap with windows macros anyway...
-#if defined(CreateWindow)
-#undef CreateWindow
-#endif
-
-// Windows Runtime Library. Needed for Microsoft::WRL::ComPtr<> template class.
-#include <wrl.h>
-// SAMUEL NOTE - The tutorial did `using namespace Microsoft::WRL;` but I prefer to only include the specific classes I need.
-template<typename T>
-using ComPtr = Microsoft::WRL::ComPtr<T>;
-
-// DirectX 12 specific headers.
-#include <d3d12.h>
-#include <dxgi1_6.h>
-#include <d3dcompiler.h>
-#include <DirectXMath.h>
-
-// D3D12 extension library.
-#include <d3dx12.h>
+#include "Utils/windxheaders.h"
 
 #include <array>
-#include <memory>
-
-#include <exception>
-// From DXSampleHelper.h 
-// Source: https://github.com/Microsoft/DirectX-Graphics-Samples
-inline void ThrowIfFailed(HRESULT hr)
-{
-    if (FAILED(hr))
-    {
-        throw std::exception();
-    }
-}
-// From https://learn.microsoft.com/en-us/windows/win32/debug/retrieving-the-last-error-code
-void ExitOnWin32Error(LPCTSTR lpszFunction)
-{
-    // Retrieve the system error message for the last-error code
-
-    LPVOID lpMsgBuf;
-    LPVOID lpDisplayBuf;
-    DWORD dw = GetLastError();
-
-    FormatMessage(
-        FORMAT_MESSAGE_ALLOCATE_BUFFER |
-        FORMAT_MESSAGE_FROM_SYSTEM |
-        FORMAT_MESSAGE_IGNORE_INSERTS,
-        NULL,
-        dw,
-        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-        (LPTSTR)&lpMsgBuf,
-        0, NULL);
-
-    // Display the error message and exit the process
-
-    lpDisplayBuf = (LPVOID)LocalAlloc(LMEM_ZEROINIT,
-        (lstrlen((LPCTSTR)lpMsgBuf) + lstrlen((LPCTSTR)lpszFunction) + 40) * sizeof(TCHAR));
-    StringCchPrintf((LPTSTR)lpDisplayBuf,
-        LocalSize(lpDisplayBuf) / sizeof(TCHAR),
-        TEXT("%s failed with error %d: %s"),
-        lpszFunction, dw, lpMsgBuf);
-    MessageBox(NULL, (LPCTSTR)lpDisplayBuf, TEXT("Error"), MB_OK);
-
-    LocalFree(lpMsgBuf);
-    LocalFree(lpDisplayBuf);
-    ExitProcess(dw);
-}
+#include <chrono>
 
 namespace RTR {
     using u32 = uint32_t;
@@ -105,11 +24,8 @@ namespace RTR {
 
     struct DX12InflightFrameState {
         // Tracking for "is this frame in-flight?"
-        // If inflight is set, this frame has been passed to the GPU for rendering and we can't use it's resources on the CPU.
-        // valueForFrameFence is the value the inflightFrameFence will take when this frame is complete, setting inflight to false.
-        // valueForFrameFence only has meaning when inflight=true.
-        bool inflight;
-        u64 valueForFrameFence;
+        // If lastFrameFence <= inflightFrameFence.GetCompletedValue() these resources are ready to use.
+        u64 lastFrameFence;
         UINT backBufferIdx;
         ComPtr<ID3D12CommandAllocator> commandAllocator;
         ComPtr<ID3D12GraphicsCommandList> commandList; // TODO the tutorial creates only one of these... but they're tied to the commandAllocator!
@@ -131,18 +47,32 @@ namespace RTR {
         UINT renderTargetDescriptorSize;
         std::array<ComPtr<ID3D12Resource>, NUM_INFLIGHT_FRAMES> backBuffers;
 
+        // A fence holds a 64-bit unsigned value that the GPU increments.
+        // More precisely, we put commands in the GPU queue to set the fence to specific values.
         ComPtr<ID3D12Fence> inflightFrameFence;
-        // The value of the inflightFrameFence, which is correlated with perFrameState[N].valueForFrameFence to determine if an inflight frame N has completed.
-        // Different to currentInflightFrame, which is the frame we're currently recording(?)
+        // The latest value we've enqueued on the GPU to set the fence to.
         u64 inflightFrameFenceValue;
-        // The next value to set perFrameState[N].valueForFrameFence to when it goes inflight.
-        u64 nextFrameFenceValue;
         HANDLE inflightFrameFenceEvent;
 
+        u64 incrementFenceFromGPUQueue() {
+            u64 fenceValueToRequest = (inflightFrameFenceValue++);
+            ThrowIfFailed(commandQueue->Signal(inflightFrameFence.Get(), fenceValueToRequest));
+            return fenceValueToRequest;
+        }
+        void cpuWaitForFenceToHaveValue(u64 expectedValue,
+            std::chrono::milliseconds duration = std::chrono::milliseconds::max()) {
+            if (inflightFrameFence->GetCompletedValue() < expectedValue)
+            {
+                ThrowIfFailed(inflightFrameFence->SetEventOnCompletion(expectedValue, inflightFrameFenceEvent));
+                ::WaitForSingleObject(inflightFrameFenceEvent, static_cast<DWORD>(duration.count()));
+            }
+        }
 
         std::array<DX12InflightFrameState, NUM_INFLIGHT_FRAMES> perFrameState;
-        // The index N in perFrameState[N] which we're currently listing commands for.
-        // perFrameState[N] will be the next frame to go inflight.
-        UINT currentInflightFrame;
+
+        void flush() {
+            u64 valueOfFenceWhenAllWorkIsFinished = incrementFenceFromGPUQueue();
+            cpuWaitForFenceToHaveValue(valueOfFenceWhenAllWorkIsFinished);
+        }
     };
 }

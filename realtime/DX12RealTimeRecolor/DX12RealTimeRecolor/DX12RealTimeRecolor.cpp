@@ -3,6 +3,7 @@
 
 #include "DX12RealTimeRecolor.h"
 #include <algorithm>
+#include <memory>
 
 using namespace RTR;
 
@@ -356,8 +357,7 @@ void dx12_init(bool useWarp) {
         // Close the list so the next thing we do (which will be at the start of the record phase) can be Reset()
         ThrowIfFailed(perFrameState[i].commandList->Close());
 
-        perFrameState[i].inflight = false;
-        perFrameState[i].valueForFrameFence = 0;
+        perFrameState[i].lastFrameFence = 0;
         perFrameState[i].backBufferIdx = 0;
     }
 
@@ -376,11 +376,9 @@ void dx12_init(bool useWarp) {
 
         .inflightFrameFence=inflightFrameFence,
         .inflightFrameFenceValue=inflightFrameFenceValue,
-        .nextFrameFenceValue=nextFrameFenceValue,
         .inflightFrameFenceEvent=inflightFrameFenceEvent,
 
         .perFrameState=perFrameState,
-        .currentInflightFrame=0
     };
 }
 
@@ -427,7 +425,7 @@ int CALLBACK wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdL
     }
 
     // Make sure the command queue has finished all commands before closing.
-    //Flush(g_CommandQueue, g_Fence, g_FenceValue, g_FenceEvent);
+    g_dx12State.flush();
 
     ::CloseHandle(g_dx12State.inflightFrameFenceEvent);
 
