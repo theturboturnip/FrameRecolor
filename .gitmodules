@@ -1,0 +1,3 @@
+[submodule "realtime/DX12RealTimeRecolor/DirectX-Headers"]
+	path = realtime/DX12RealTimeRecolor/DirectX-Headers
+	url = https://github.com/microsoft/DirectX-Headers
