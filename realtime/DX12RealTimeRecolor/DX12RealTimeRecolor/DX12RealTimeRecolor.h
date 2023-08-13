@@ -32,6 +32,13 @@ namespace RTR {
         ComPtr<ID3D12GraphicsCommandList> commandList; // TODO the tutorial creates only one of these... but they're tied to the commandAllocator!
     };
 
+    struct DX12VideoDecodeState {
+        ComPtr<ID3D12VideoDecoder> decoder;
+        ComPtr<ID3D12VideoDecoderHeap> heap;
+        ComPtr<ID3D12VideoProcessCommandList> commandList;
+        ComPtr<ID3D12VideoProcessor> processor;
+    };
+
     struct DX12State {
         ComPtr<ID3D12Device2> device;
         ComPtr<ID3D12VideoDevice> videoDevice;

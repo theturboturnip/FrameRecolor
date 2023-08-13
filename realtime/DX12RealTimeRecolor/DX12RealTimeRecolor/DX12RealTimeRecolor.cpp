@@ -45,6 +45,112 @@ Arguments parse_command_line_args() {
     return args;
 }
 
+extern "C" {
+#include "libavformat/avformat.h"
+}
+struct ParsedFormat {
+    AVCodecID codec;
+    bool hdr;
+    bool interlace;
+};
+
+ParsedFormat detect_format_of(const char* path) {
+    // From https://stackoverflow.com/a/6452150/4248422
+
+    // TODO handle non-wide paths using WideCharToMultiByte to convert a widechar path to utf-8 for libavformat to use??
+    // https://stackoverflow.com/a/3999597/4248422
+    AVFormatContext* pFormatCtx = avformat_alloc_context();
+    assert(pFormatCtx);
+    int err = avformat_open_input(&pFormatCtx, path, NULL, NULL);
+    if (err) {
+        char errbuf[AV_ERROR_MAX_STRING_SIZE] = { 0 };
+        OutputDebugStringA( av_make_error_string(errbuf, AV_ERROR_MAX_STRING_SIZE, err));
+        abort();
+    }
+    err = avformat_find_stream_info(pFormatCtx, NULL);
+    if (err) {
+        char errbuf[AV_ERROR_MAX_STRING_SIZE] = { 0 };
+        OutputDebugStringA(av_make_error_string(errbuf, AV_ERROR_MAX_STRING_SIZE, err));
+        abort();
+    }
+    
+    int videoStream = -1;
+    for (int i = 0; i < pFormatCtx->nb_streams; i++) {
+        if (pFormatCtx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO && videoStream < 0) {
+            assert(videoStream == -1 && "Multiple video streams!");
+            videoStream = i;
+        }
+    }
+    assert(videoStream != -1 && "No video streams!");
+
+    auto pCodecCtx = pFormatCtx->streams[videoStream]->codecpar;
+    assert(pCodecCtx != nullptr);
+    auto videoCodec = pCodecCtx->codec_id;
+    assert(videoCodec != AV_CODEC_ID_NONE);
+
+    // https://video.stackexchange.com/a/34827
+    bool hdr = false;
+    switch (pCodecCtx->color_trc) {
+    case AVCOL_TRC_SMPTE2084:
+    //case AVCOL_TRC_SMPTEST2084:
+    case AVCOL_TRC_SMPTE428:
+    //case AVCOL_TRC_SMPTEST428_1:
+    case AVCOL_TRC_ARIB_STD_B67:
+        hdr = true;
+        break;
+    }
+
+    avformat_close_input(&pFormatCtx);
+    avformat_free_context(pFormatCtx);
+
+    return ParsedFormat{
+        .codec = videoCodec,
+        .hdr = hdr
+    };
+}
+
+HRESULT dx12_profile_from_libavformat(ParsedFormat format, GUID& outGUID) {
+    switch (format.codec) {
+    case AV_CODEC_ID_MPEG1VIDEO:
+    case AV_CODEC_ID_MPEG2VIDEO:
+        outGUID = D3D12_VIDEO_DECODE_PROFILE_MPEG1_AND_MPEG2;
+        //outGUID = D3D12_VIDEO_DECODE_PROFILE_MPEG2;
+        break;
+    case AV_CODEC_ID_MPEG4: // I think this is valid?
+    case AV_CODEC_ID_H264:
+        outGUID = D3D12_VIDEO_DECODE_PROFILE_H264;
+        //outGUID = D3D12_VIDEO_DECODE_PROFILE_H264_STEREO_PROGRESSIVE;
+        //outGUID = D3D12_VIDEO_DECODE_PROFILE_H264_STEREO;
+        //outGUID = D3D12_VIDEO_DECODE_PROFILE_H264_MULTIVIEW;
+        break;
+    case AV_CODEC_ID_VC1:
+        outGUID = D3D12_VIDEO_DECODE_PROFILE_VC1;
+        //outGUID = D3D12_VIDEO_DECODE_PROFILE_VC1_D2010;
+        break;
+
+        //outGUID = D3D12_VIDEO_DECODE_PROFILE_MPEG4PT2_SIMPLE;
+        //outGUID = D3D12_VIDEO_DECODE_PROFILE_MPEG4PT2_ADVSIMPLE_NOGMC;
+    case AV_CODEC_ID_HEVC:
+        if (format.hdr) {
+            outGUID = D3D12_VIDEO_DECODE_PROFILE_HEVC_MAIN10;
+        }
+        else {
+            outGUID = D3D12_VIDEO_DECODE_PROFILE_HEVC_MAIN;
+        }
+        //outGUID = D3D12_VIDEO_DECODE_PROFILE_VP9;
+        //outGUID = D3D12_VIDEO_DECODE_PROFILE_VP9_10BIT_PROFILE2;
+        //outGUID = D3D12_VIDEO_DECODE_PROFILE_VP8;
+        //outGUID = D3D12_VIDEO_DECODE_PROFILE_AV1_PROFILE0;
+        //outGUID = D3D12_VIDEO_DECODE_PROFILE_AV1_PROFILE1;
+        //outGUID = D3D12_VIDEO_DECODE_PROFILE_AV1_PROFILE2;
+        //outGUID = D3D12_VIDEO_DECODE_PROFILE_AV1_12BIT_PROFILE2;
+        //outGUID = D3D12_VIDEO_DECODE_PROFILE_AV1_12BIT_PROFILE2_420;
+    default:
+        return E_FAIL;
+    }
+    return S_OK;
+}
+
 // Global state
 WindowState g_windowState;
 bool g_windowInitialized = false;
@@ -171,7 +277,7 @@ ComPtr<ID3D12DescriptorHeap> dx12_create_descriptor_heap(ComPtr<ID3D12Device2> d
     return descriptorHeap;
 }
 
-void dx12_init(bool useWarp) {
+void dx12_init(bool useWarp, ParsedFormat format480, ParsedFormat format2160) {
     assert(g_windowInitialized);
 
     // Start: make a DXGI adapter
@@ -368,17 +474,35 @@ void dx12_init(bool useWarp) {
     ComPtr<ID3D12VideoDevice> videoDevice;
     ThrowIfFailed(d3d12Device2.As(&videoDevice));
 
-    /*ComPtr<ID3D12VideoDecoder> videoDecoder;
-    auto videoDecoderDesc = D3D12_VIDEO_DECODER_DESC {
+    GUID format480GUID;
+    ThrowIfFailed(dx12_profile_from_libavformat(format480, format480GUID));
+    ComPtr<ID3D12VideoDecoder> videoDecoder480;
+    auto videoDecoder480Desc = D3D12_VIDEO_DECODER_DESC{
         .NodeMask = 0,
         .Configuration = D3D12_VIDEO_DECODE_CONFIGURATION {
-
+            .DecodeProfile = format480GUID,
+            .BitstreamEncryption = D3D12_BITSTREAM_ENCRYPTION_TYPE_NONE,
+            .InterlaceType = D3D12_VIDEO_FRAME_CODED_INTERLACE_TYPE_FIELD_BASED // hedge bets if interlaced?
         }
     };
-    ThrowIfFailed(videoDevice->CreateVideoDecoder(&videoDecoderDesc, IID_PPV_ARGS(&videoDecoder)));*/
+    ThrowIfFailed(videoDevice->CreateVideoDecoder(&videoDecoder480Desc, IID_PPV_ARGS(&videoDecoder480)));
+
+    GUID format2160GUID;
+    ThrowIfFailed(dx12_profile_from_libavformat(format2160, format2160GUID));
+    ComPtr<ID3D12VideoDecoder> videoDecoder2160;
+    auto videoDecoder2160Desc = D3D12_VIDEO_DECODER_DESC{
+        .NodeMask = 0,
+        .Configuration = D3D12_VIDEO_DECODE_CONFIGURATION {
+            .DecodeProfile = format2160GUID,
+            .BitstreamEncryption = D3D12_BITSTREAM_ENCRYPTION_TYPE_NONE,
+            .InterlaceType = D3D12_VIDEO_FRAME_CODED_INTERLACE_TYPE_FIELD_BASED // hedge bets if interlaced?
+        }
+    };
+    ThrowIfFailed(videoDevice->CreateVideoDecoder(&videoDecoder2160Desc, IID_PPV_ARGS(&videoDecoder2160)));
 
     g_dx12State = DX12State{
         .device = d3d12Device2,
+        .videoDevice = videoDevice,
         .commandQueue = d3d12CommandQueue,
         
         .swapchain = dxgiSwapChain4,
@@ -470,6 +594,13 @@ int CALLBACK wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdL
 
     auto args = parse_command_line_args();
 
+    auto format480 = detect_format_of("../../../../480p.mp4");
+    auto format2160 = detect_format_of("../../../../2160p.mkv");
+
+    OutputDebugStringA(avcodec_get_name(format480.codec));
+    OutputDebugStringA(avcodec_get_name(format2160.codec));
+    //fprintf(stderr, "480p:  %s\n2160p: %s\n", avcodec_get_name(format480), avcodec_get_name(format2160));
+
 #if defined(_DEBUG)
     // Always enable the debug layer before doing anything DX12 related
     // so all possible errors generated while creating DX12 objects
@@ -487,7 +618,7 @@ int CALLBACK wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdL
         args.requestedWindowHeight
     );
     g_windowInitialized = true;
-    dx12_init(args.enableWARP);
+    dx12_init(args.enableWARP, format480, format2160);
     g_dx12Initialized = true;
 
     ::ShowWindow(g_windowState.hWnd, SW_SHOW);
