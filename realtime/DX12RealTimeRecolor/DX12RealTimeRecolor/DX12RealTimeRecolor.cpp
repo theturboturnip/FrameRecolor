@@ -3,7 +3,6 @@
 
 #include "DX12RealTimeRecolor.h"
 #include <algorithm>
-#include <memory>
 
 using namespace RTR;
 
@@ -315,9 +314,20 @@ void dx12_init(bool useWarp) {
         ThrowIfFailed(dxgiSwapChain1.As(&dxgiSwapChain4));
     }
 
-    // We have the device, create the descriptor heap
+    // We have the device, create the descriptor heap and backbuffer array
     auto renderTargetDescriptorHeap = dx12_create_descriptor_heap(d3d12Device2, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, NUM_INFLIGHT_FRAMES);
     UINT renderTargetDescriptorSize = d3d12Device2->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+    std::array<ComPtr<ID3D12Resource>, NUM_INFLIGHT_FRAMES> backBuffers;
+    CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(renderTargetDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
+    for (u32 i = 0; i < NUM_INFLIGHT_FRAMES; i++) {
+        ThrowIfFailed(dxgiSwapChain4->GetBuffer(i, IID_PPV_ARGS(&backBuffers[i])));
+        d3d12Device2->CreateRenderTargetView(
+            backBuffers[i].Get(),
+            nullptr,
+            rtvHandle
+        );
+        rtvHandle.Offset(renderTargetDescriptorSize);
+    }
 
     // We have the device, create the fence
     u64 inflightFrameFenceValue = 0;
@@ -330,17 +340,8 @@ void dx12_init(bool useWarp) {
         ExitOnWin32Error(TEXT("CreateEvent"));
     }
 
-    DX12InflightFrameState perFrameState[NUM_INFLIGHT_FRAMES];
-    CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(renderTargetDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
+    std::array<DX12InflightFrameState, NUM_INFLIGHT_FRAMES> perFrameState;
     for (u32 i = 0; i < NUM_INFLIGHT_FRAMES; i++) {
-        // Setup the back buffer
-        ThrowIfFailed(dxgiSwapChain4->GetBuffer(i, IID_PPV_ARGS(&perFrameState[i].backBuffer)));
-        d3d12Device2->CreateRenderTargetView(
-            perFrameState[i].backBuffer.Get(),
-            nullptr,
-            rtvHandle
-        );
-        rtvHandle.Offset(renderTargetDescriptorSize);
         // Setup the command allocator
         auto command_list_type = D3D12_COMMAND_LIST_TYPE_DIRECT;
         ThrowIfFailed(d3d12Device2->CreateCommandAllocator(command_list_type, IID_PPV_ARGS(&perFrameState[i].commandAllocator)));
@@ -357,6 +358,7 @@ void dx12_init(bool useWarp) {
 
         perFrameState[i].inflight = false;
         perFrameState[i].valueForFrameFence = 0;
+        perFrameState[i].backBufferIdx = 0;
     }
 
     g_dx12State = DX12State{
@@ -370,14 +372,14 @@ void dx12_init(bool useWarp) {
 
         .renderTargetDescriptorHeap=renderTargetDescriptorHeap,
         .renderTargetDescriptorSize=renderTargetDescriptorSize,
+        .backBuffers=backBuffers,
 
         .inflightFrameFence=inflightFrameFence,
         .inflightFrameFenceValue=inflightFrameFenceValue,
         .nextFrameFenceValue=nextFrameFenceValue,
         .inflightFrameFenceEvent=inflightFrameFenceEvent,
 
-        // MSVC breaks when I try to do .perFrameState = perFrameState because it sucks.
-        .perFrameState = { perFrameState[0], perFrameState[1], perFrameState[2] },
+        .perFrameState=perFrameState,
         .currentInflightFrame=0
     };
 }

@@ -42,6 +42,9 @@ using ComPtr = Microsoft::WRL::ComPtr<T>;
 // D3D12 extension library.
 #include <d3dx12.h>
 
+#include <array>
+#include <memory>
+
 #include <exception>
 // From DXSampleHelper.h 
 // Source: https://github.com/Microsoft/DirectX-Graphics-Samples
@@ -101,16 +104,15 @@ namespace RTR {
     };
 
     struct DX12InflightFrameState {
-        // TODO decouple the backBuffer from these - it's tied to the swapchain
-        ComPtr<ID3D12Resource> backBuffer;
-        ComPtr<ID3D12CommandAllocator> commandAllocator;
-        ComPtr<ID3D12GraphicsCommandList> commandList; // TODO the tutorial creates only one of these... but they're tied to the commandAllocator!
         // Tracking for "is this frame in-flight?"
         // If inflight is set, this frame has been passed to the GPU for rendering and we can't use it's resources on the CPU.
         // valueForFrameFence is the value the inflightFrameFence will take when this frame is complete, setting inflight to false.
         // valueForFrameFence only has meaning when inflight=true.
         bool inflight;
         u64 valueForFrameFence;
+        UINT backBufferIdx;
+        ComPtr<ID3D12CommandAllocator> commandAllocator;
+        ComPtr<ID3D12GraphicsCommandList> commandList; // TODO the tutorial creates only one of these... but they're tied to the commandAllocator!
     };
 
     struct DX12State {
@@ -127,6 +129,7 @@ namespace RTR {
         // The size of a render target descriptor is vendor-dependent.
         ComPtr<ID3D12DescriptorHeap> renderTargetDescriptorHeap;
         UINT renderTargetDescriptorSize;
+        std::array<ComPtr<ID3D12Resource>, NUM_INFLIGHT_FRAMES> backBuffers;
 
         ComPtr<ID3D12Fence> inflightFrameFence;
         // The value of the inflightFrameFence, which is correlated with perFrameState[N].valueForFrameFence to determine if an inflight frame N has completed.
@@ -136,7 +139,8 @@ namespace RTR {
         u64 nextFrameFenceValue;
         HANDLE inflightFrameFenceEvent;
 
-        DX12InflightFrameState perFrameState[NUM_INFLIGHT_FRAMES];
+
+        std::array<DX12InflightFrameState, NUM_INFLIGHT_FRAMES> perFrameState;
         // The index N in perFrameState[N] which we're currently listing commands for.
         // perFrameState[N] will be the next frame to go inflight.
         UINT currentInflightFrame;
