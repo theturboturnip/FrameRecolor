@@ -25,6 +25,11 @@ namespace RTR {
         ComPtr<ID3D11Device> device;
         ComPtr<ID3D11DeviceContext> deviceContext;
 
+        // TODO multiple backbuffers
+        ComPtr<ID3D11RenderTargetView> backBuffer;
+
+        D3D11_VIEWPORT viewport;
+
         void enqueueRenderAndPresentForNextFrame();
         void flushAndClose();
     };

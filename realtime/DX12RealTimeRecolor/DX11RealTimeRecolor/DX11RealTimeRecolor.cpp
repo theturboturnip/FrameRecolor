@@ -187,10 +187,41 @@ void dx11_init() {
         NULL,
         &deviceContext
     ));
+
+    ComPtr<ID3D11Texture2D> backBufferTex;
+    ComPtr<ID3D11RenderTargetView> backBuffer;
+    ThrowIfFailed(swapchain->GetBuffer(0, IID_PPV_ARGS(&backBufferTex)));
+    ThrowIfFailed(device->CreateRenderTargetView(backBufferTex.Get(), NULL, &backBuffer));
+
+    g_dx11State = DX11State{
+        .swapchain = swapchain,
+        .device = device,
+        .deviceContext = deviceContext,
+
+        .backBuffer = backBuffer,
+
+        .viewport = {
+            .TopLeftX = 0,
+            .TopLeftY = 0,
+            .Width = g_windowState.clientWidth * 1.0f,
+            .Height = g_windowState.clientHeight * 1.0f,
+        }
+    };
 }
 
 void DX11State::enqueueRenderAndPresentForNextFrame() {
+    ID3D11RenderTargetView* targets[] = { backBuffer.Get() };
+    deviceContext->OMSetRenderTargets(1, targets, NULL);
+    deviceContext->RSSetViewports(1, &viewport);
 
+    // clear the back buffer
+    FLOAT clearColor[] = { 0.4f, 0.6f, 0.9f, 1.0f };
+    deviceContext->ClearRenderTargetView(backBuffer.Get(), clearColor);
+
+    // do 3D rendering on the back buffer here
+
+    // switch the back buffer and the front buffer
+    swapchain->Present(0, 0);
 }
 void DX11State::flushAndClose() {
     // This can really be taken care of by destructors...
