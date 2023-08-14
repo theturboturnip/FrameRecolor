@@ -35,8 +35,8 @@ namespace RTR {
     struct DX12VideoDecodeState {
         ComPtr<ID3D12VideoDecoder> decoder;
         ComPtr<ID3D12VideoDecoderHeap> heap;
-        ComPtr<ID3D12VideoProcessCommandList> commandList;
         ComPtr<ID3D12VideoProcessor> processor;
+        ComPtr<ID3D12VideoProcessCommandList> commandList;
     };
 
     struct DX12State {

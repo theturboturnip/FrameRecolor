@@ -49,9 +49,71 @@ extern "C" {
 #include "libavformat/avformat.h"
 }
 struct ParsedFormat {
-    AVCodecID codec;
-    bool hdr;
-    bool interlace;
+    /**
+     * General type of the encoded data.
+     */
+    enum AVMediaType codec_type;
+    /**
+     * Specific type of the encoded data (the codec used).
+     */
+    enum AVCodecID   codec_id;
+    /**
+     * Additional information about the codec (corresponds to the AVI FOURCC).
+     */
+    uint32_t         codec_tag;
+
+    enum AVPixelFormat pixel_format;
+
+    int width, height;
+
+    int64_t bitrate;
+
+    /**
+     * Video only. The aspect ratio (width / height) which a single pixel
+     * should have when displayed.
+     *
+     * When the aspect ratio is unknown / undefined, the numerator should be
+     * set to 0 (the denominator may have any value).
+     */
+    AVRational sample_aspect_ratio;
+
+    /**
+     * Video only. The order of the fields in interlaced video.
+     */
+    enum AVFieldOrder                  field_order;
+
+    /**
+     * Video only. Additional colorspace characteristics.
+     */
+    enum AVColorRange                  color_range;
+    enum AVColorPrimaries              color_primaries;
+    enum AVColorTransferCharacteristic color_trc;
+    enum AVColorSpace                  color_space;
+    enum AVChromaLocation              chroma_location;
+
+    AVRational framerate;
+
+    bool is_hdr() const {
+        switch (color_trc) {
+        case AVCOL_TRC_SMPTE2084:
+            //case AVCOL_TRC_SMPTEST2084:
+        case AVCOL_TRC_SMPTE428:
+            //case AVCOL_TRC_SMPTEST428_1:
+        case AVCOL_TRC_ARIB_STD_B67:
+            return true;
+        default:
+            return false;
+        }
+    }
+    bool may_be_interlaced() const {
+        switch (field_order) {
+        case AV_FIELD_PROGRESSIVE:
+            return false;
+        case AV_FIELD_UNKNOWN:
+        default:
+            return true;
+        }
+    }
 };
 
 ParsedFormat detect_format_of(const char* path) {
@@ -85,32 +147,40 @@ ParsedFormat detect_format_of(const char* path) {
 
     auto pCodecCtx = pFormatCtx->streams[videoStream]->codecpar;
     assert(pCodecCtx != nullptr);
-    auto videoCodec = pCodecCtx->codec_id;
-    assert(videoCodec != AV_CODEC_ID_NONE);
 
-    // https://video.stackexchange.com/a/34827
-    bool hdr = false;
-    switch (pCodecCtx->color_trc) {
-    case AVCOL_TRC_SMPTE2084:
-    //case AVCOL_TRC_SMPTEST2084:
-    case AVCOL_TRC_SMPTE428:
-    //case AVCOL_TRC_SMPTEST428_1:
-    case AVCOL_TRC_ARIB_STD_B67:
-        hdr = true;
-        break;
-    }
+    auto format = ParsedFormat {
+        .codec_type = pCodecCtx->codec_type,
+        .codec_id = pCodecCtx->codec_id,
+        .codec_tag = pCodecCtx->codec_tag,
+
+        .pixel_format = (AVPixelFormat)pCodecCtx->format, // This is AVPixelFormat when for a video stream, otherwise AVSampleFormat
+
+        .width = pCodecCtx->width,
+        .height = pCodecCtx->height,
+
+        .bitrate = pCodecCtx->bit_rate,
+
+        .sample_aspect_ratio = pCodecCtx->sample_aspect_ratio,
+
+        .field_order = pCodecCtx->field_order,
+
+        .color_range = pCodecCtx->color_range,
+        .color_primaries = pCodecCtx->color_primaries,
+        .color_trc = pCodecCtx->color_trc,
+        .color_space = pCodecCtx->color_space,
+        .chroma_location = pCodecCtx->chroma_location,
+
+        .framerate = pCodecCtx->framerate,
+    };
 
     avformat_close_input(&pFormatCtx);
     avformat_free_context(pFormatCtx);
 
-    return ParsedFormat{
-        .codec = videoCodec,
-        .hdr = hdr
-    };
+    return format;
 }
 
-HRESULT dx12_profile_from_libavformat(ParsedFormat format, GUID& outGUID) {
-    switch (format.codec) {
+HRESULT dx12_profile_from_libavformat(ParsedFormat& format, GUID& outGUID) {
+    switch (format.codec_id) {
     case AV_CODEC_ID_MPEG1VIDEO:
     case AV_CODEC_ID_MPEG2VIDEO:
         outGUID = D3D12_VIDEO_DECODE_PROFILE_MPEG1_AND_MPEG2;
@@ -131,7 +201,7 @@ HRESULT dx12_profile_from_libavformat(ParsedFormat format, GUID& outGUID) {
         //outGUID = D3D12_VIDEO_DECODE_PROFILE_MPEG4PT2_SIMPLE;
         //outGUID = D3D12_VIDEO_DECODE_PROFILE_MPEG4PT2_ADVSIMPLE_NOGMC;
     case AV_CODEC_ID_HEVC:
-        if (format.hdr) {
+        if (format.is_hdr()) {
             outGUID = D3D12_VIDEO_DECODE_PROFILE_HEVC_MAIN10;
         }
         else {
@@ -275,6 +345,45 @@ ComPtr<ID3D12DescriptorHeap> dx12_create_descriptor_heap(ComPtr<ID3D12Device2> d
     ThrowIfFailed(device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&descriptorHeap)));
 
     return descriptorHeap;
+}
+
+DX12VideoDecodeState dx12_create_video_decoder(ComPtr<ID3D12VideoDevice> device, ParsedFormat& format) {
+    auto decodeConfig = D3D12_VIDEO_DECODE_CONFIGURATION{
+        .DecodeProfile = dx12_profile_from_libavformat(format),
+        .BitstreamEncryption = D3D12_BITSTREAM_ENCRYPTION_TYPE_NONE,
+        .InterlaceType = D3D12_VIDEO_FRAME_CODED_INTERLACE_TYPE_FIELD_BASED // hedge bets if interlaced?
+    };
+
+    auto decoderDesc = D3D12_VIDEO_DECODER_DESC {
+        .NodeMask = 0,
+        .Configuration = decodeConfig
+    };
+    ComPtr<ID3D12VideoDecoder> decoder;
+    ThrowIfFailed(device->CreateVideoDecoder(&decoderDesc, IID_PPV_ARGS(&decoder)));
+
+    assert(format.width > 0);
+    assert(format.width <= std::numeric_limits<u32>::max());
+    assert(format.height > 0);
+    assert(format.height <= std::numeric_limits<u32>::max());
+    assert(format.bitrate > 0);
+    assert(format.bitrate <= std::numeric_limits<u32>::max());
+
+    auto decoderHeapDesc = D3D12_VIDEO_DECODER_HEAP_DESC{
+        .NodeMask = 0,
+        .Configuration = decodeConfig,
+        .DecodeWidth = (u32)format.width,
+        .DecodeHeight = (u32)format.height,
+        //.Format = ,
+        .FrameRate = DXGI_RATIONAL {
+            .Numerator = (u32)format.framerate.num,
+            .Denominator = (u32)format.framerate.den,
+        },
+        .BitRate = (u32)format.bitrate,
+    };
+    ComPtr<ID3D12VideoDecoderHeap> decoderHeap;
+    ThrowIfFailed(device->CreateVideoDecoderHeap(&decoderHeapDesc, IID_PPV_ARGS(&decoder)));
+
+
 }
 
 void dx12_init(bool useWarp, ParsedFormat format480, ParsedFormat format2160) {
