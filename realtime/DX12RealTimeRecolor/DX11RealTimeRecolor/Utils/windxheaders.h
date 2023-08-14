@@ -34,6 +34,7 @@ using ComPtr = Microsoft::WRL::ComPtr<T>;
 #include <DirectXMath.h>
 
 #include <exception>
+#include <stdexcept>
 // From DXSampleHelper.h 
 // Source: https://github.com/Microsoft/DirectX-Graphics-Samples
 inline void ThrowIfFailed(HRESULT hr)
@@ -75,4 +76,24 @@ void ExitOnWin32Error(LPCTSTR lpszFunction)
     LocalFree(lpMsgBuf);
     LocalFree(lpDisplayBuf);
     ExitProcess(dw);
+}
+
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+#include <libavutil/pixdesc.h>
+#include <libavutil/hwcontext.h>
+#include <libavutil/opt.h>
+#include <libavutil/avassert.h>
+#include <libavutil/imgutils.h>
+#include <libavutil/hwcontext_d3d11va.h>
+}
+inline int ThrowIfFfmpegFail(int ret) {
+    if (ret < 0) {
+        char errbuf[AV_ERROR_MAX_STRING_SIZE] = { 0 };
+        av_make_error_string(errbuf, AV_ERROR_MAX_STRING_SIZE, ret);
+        OutputDebugStringA(errbuf);
+        throw std::runtime_error(std::string(errbuf));
+    }
+    return ret;
 }

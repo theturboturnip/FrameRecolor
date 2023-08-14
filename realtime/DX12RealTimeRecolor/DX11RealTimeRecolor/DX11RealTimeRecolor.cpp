@@ -39,7 +39,6 @@ Arguments parse_command_line_args() {
 // Global state
 WindowState g_windowState;
 bool g_windowInitialized = false;
-DX11State g_dx11State;
 bool g_dx11Initialized = false;
 
 // Window callback function.
@@ -50,7 +49,6 @@ LRESULT CALLBACK window_message_callback(HWND hWnd, UINT uMsg, WPARAM wParam, LP
         ::PostQuitMessage(0);
         break;
     case WM_PAINT:
-        g_dx11State.enqueueRenderAndPresentForNextFrame();
         break;
     }
     return ::DefWindowProc(hWnd, uMsg, wParam, lParam);
@@ -133,7 +131,7 @@ WindowState create_window(
     };
 }
 
-void dx11_init() {
+DX11State dx11_init() {
     assert(g_windowInitialized);
 
     /*DXGI_MODE_DESC BufferDesc;
@@ -193,12 +191,13 @@ void dx11_init() {
     ThrowIfFailed(swapchain->GetBuffer(0, IID_PPV_ARGS(&backBufferTex)));
     ThrowIfFailed(device->CreateRenderTargetView(backBufferTex.Get(), NULL, &backBuffer));
 
-    g_dx11State = DX11State{
+    return DX11State{
         .swapchain = swapchain,
         .device = device,
         .deviceContext = deviceContext,
 
         .backBuffer = backBuffer,
+        .backBufferTex = backBufferTex,
 
         .viewport = {
             .TopLeftX = 0,
@@ -209,7 +208,7 @@ void dx11_init() {
     };
 }
 
-void DX11State::enqueueRenderAndPresentForNextFrame() {
+void DX11State::enqueueRenderAndPresentForNextFrame(ComPtr<ID3D11Texture2D> frame) {
     ID3D11RenderTargetView* targets[] = { backBuffer.Get() };
     deviceContext->OMSetRenderTargets(1, targets, NULL);
     deviceContext->RSSetViewports(1, &viewport);
@@ -218,16 +217,94 @@ void DX11State::enqueueRenderAndPresentForNextFrame() {
     FLOAT clearColor[] = { 0.4f, 0.6f, 0.9f, 1.0f };
     deviceContext->ClearRenderTargetView(backBuffer.Get(), clearColor);
 
-    // do 3D rendering on the back buffer here
+    // copy the frame in
+    if (frame) {
+        //deviceContext->CopySubresourceRegion(
+        //    backBufferTex.Get(), 0, 0, 0, 0,
+        //    frame.Get(), 0, nullptr);
+    }
 
     // switch the back buffer and the front buffer
     swapchain->Present(0, 0);
 }
 void DX11State::flushAndClose() {
-    // This can really be taken care of by destructors...
     deviceContext.Reset();
     device.Reset();
     swapchain.Reset();
+}
+
+// Callback used by 
+AVPixelFormat get_hw_format(AVCodecContext* ctx, const AVPixelFormat* pix_fmts) {
+    for (auto p = pix_fmts; *p != -1; p++) {
+        if (*p == AV_PIX_FMT_D3D11)
+            return AV_PIX_FMT_D3D11;
+    }
+    fprintf(stderr, "Failed to get HW surface format\n");
+    return AV_PIX_FMT_NONE;
+}
+
+FFMpegPerVideoState ffmpeg_create_decoder(DX11State& dx11State, const char* path) {
+    FFMpegPerVideoState state = {};
+
+    // Open the video and figure out what streams it has
+    ThrowIfFfmpegFail(avformat_open_input(&state.input_ctx, path, NULL, NULL));
+    ThrowIfFfmpegFail(avformat_find_stream_info(state.input_ctx, NULL));
+
+    // Find the best video stream, allocating and filling in certain properties of a decoder (but not opening the decoder yet...)
+    // The function specification for this claims to write sometihng into const AVCodec**... breaks const correctness...
+    state.video_stream_index = ThrowIfFfmpegFail(av_find_best_stream(state.input_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, (const AVCodec**) &state.decoder, 0));
+    state.video_stream = state.input_ctx->streams[state.video_stream_index];
+
+    // Allocate a decoder context, fill it with parameters for the video codec we want and the hardware device context...
+    state.decoder_ctx = avcodec_alloc_context3(state.decoder);
+    assert(state.decoder_ctx);
+    // Set up the decoder with the correct parameters for this video stream's codec
+    ThrowIfFfmpegFail(avcodec_parameters_to_context(state.decoder_ctx, state.video_stream->codecpar));
+    // Request the D3D11 format
+    state.decoder_ctx->get_format = get_hw_format;
+    // ... I think this means there's only one DX11 frame texture, and it gets reused?
+    av_opt_set_int(state.decoder_ctx, "refcounted_frames", 1, 0);
+    // Create a hardware device context using the DX11 device, put it into the decoder_ctx
+    {
+        AVBufferRef* hw_device_ctx = av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_D3D11VA);
+        AVHWDeviceContext* device_ctx = reinterpret_cast<AVHWDeviceContext*>(hw_device_ctx->data);
+        AVD3D11VADeviceContext* d3d11va_device_ctx = reinterpret_cast<AVD3D11VADeviceContext*>(device_ctx->hwctx);
+        d3d11va_device_ctx->device = dx11State.device.Get();
+        state.decoder_ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
+        av_hwdevice_ctx_init(state.decoder_ctx->hw_device_ctx);
+    }
+
+    // Decoder context now has all parameters filled in, now actually open the decoder
+    ThrowIfFfmpegFail(avcodec_open2(state.decoder_ctx, state.decoder, NULL));
+
+    state.packet = av_packet_alloc();
+    state.frame = av_frame_alloc();
+
+    return state;
+}
+
+void FFMpegPerVideoState::readFrame() {
+    do {
+        av_packet_unref(packet);
+        ThrowIfFfmpegFail(av_read_frame(input_ctx, packet));
+    } while (packet->stream_index != video_stream_index);
+
+    ThrowIfFfmpegFail(avcodec_send_packet(decoder_ctx, packet));
+    
+    int ret = avcodec_receive_frame(decoder_ctx, frame);
+    switch (ret) {
+    case 0:
+        this->latestFrame = (ID3D11Texture2D*)frame->data[0];
+        break;
+    case AVERROR_EOF:
+    case AVERROR(EAGAIN):
+        this->latestFrame = nullptr; // Don't copy more stuff around, hopefully frame is still valid with the last frame of the video...
+        break;
+    case AVERROR(EINVAL):
+        ThrowIfFfmpegFail(ret);
+    default:
+        ThrowIfFfmpegFail(ret);
+    }
 }
 
 int CALLBACK wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLine, int nCmdShow)
@@ -255,26 +332,34 @@ int CALLBACK wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdL
         args.requestedWindowHeight
     );
     g_windowInitialized = true;
-    dx11_init();
-    g_dx11Initialized = true;
 
-    ::ShowWindow(g_windowState.hWnd, SW_SHOW);
-
-    MSG msg = {};
-    while (msg.message != WM_QUIT)
     {
-        if (::PeekMessage(&msg, NULL, 0, 0, PM_REMOVE))
-        {
-            ::TranslateMessage(&msg);
-            ::DispatchMessage(&msg);
-        }
-        else {
-            g_dx11State.enqueueRenderAndPresentForNextFrame();
-        }
-    }
+        DX11State dx11State = dx11_init();
+        FFMpegPerVideoState ffmpeg480 = ffmpeg_create_decoder(dx11State, "../../../../480p.mp4");
+        //FFMpegPerVideoState ffmpeg2160 = ffmpeg_create_decoder(dx11State, "../../../../2160p.mkv");
 
-    // Make sure the command queue has finished all commands before closing.
-    g_dx11State.flushAndClose();
+        ::ShowWindow(g_windowState.hWnd, SW_SHOW);
+
+        MSG msg = {};
+        while (msg.message != WM_QUIT)
+        {
+            if (::PeekMessage(&msg, NULL, 0, 0, PM_REMOVE))
+            {
+                ::TranslateMessage(&msg);
+                ::DispatchMessage(&msg);
+            }
+            else {
+                if (ffmpeg480.latestFrame == nullptr) {
+                    ffmpeg480.readFrame();
+                }
+                dx11State.enqueueRenderAndPresentForNextFrame(ffmpeg480.latestFrame);
+            }
+        }
+
+        // Make sure the command queue has finished all commands before closing.
+        ffmpeg480.flushAndClose();
+        dx11State.flushAndClose();
+    }
 
     //::CloseHandle(g_dx12State.inflightFrameFenceEvent);
 
