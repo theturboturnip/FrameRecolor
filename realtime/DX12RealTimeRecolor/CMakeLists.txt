@@ -9,4 +9,5 @@ list(APPEND CMAKE_PREFIX_PATH "${CMAKE_SOURCE_DIR}/ffmpeg-master-latest-win64-gp
 
 # Include sub-projects.
 add_subdirectory ("DirectX-Headers")
+add_subdirectory ("DX11RealTimeRecolor")
 add_subdirectory ("DX12RealTimeRecolor")
