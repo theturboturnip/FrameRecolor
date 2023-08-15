@@ -181,7 +181,7 @@ struct DX11VertexShaderStuff {
 
 DX11VertexShaderStuff dx11_compile_vertex_shader(ComPtr<ID3D11Device>& device, _In_ LPCWSTR srcFile, D3D11_INPUT_ELEMENT_DESC* pInputElementDescs, u32 NumElements) {
     ID3DBlob* blob = nullptr;
-    ThrowIfFailed(dx11_compile_shader_blob(srcFile, "VS", "vs_5_0", &blob));
+    ThrowIfFailed(D3DReadFileToBlob(srcFile, &blob));
 
     ComPtr<ID3D11VertexShader> vertexShader;
     ThrowIfFailed(device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), NULL, &vertexShader));
@@ -197,7 +197,7 @@ DX11VertexShaderStuff dx11_compile_vertex_shader(ComPtr<ID3D11Device>& device, _
 
 ComPtr<ID3D11PixelShader> dx11_compile_pixel_shader(ComPtr<ID3D11Device>& device, _In_ LPCWSTR srcFile) {
     ID3DBlob* blob = nullptr;
-    ThrowIfFailed(dx11_compile_shader_blob(srcFile, "PS", "ps_5_0", &blob));
+    ThrowIfFailed(D3DReadFileToBlob(srcFile, &blob));
 
     ComPtr<ID3D11PixelShader> pixelShader;
     ThrowIfFailed(device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), NULL, &pixelShader));
@@ -298,7 +298,7 @@ DX11State dx11_init() {
         {"POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
         {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 16, D3D11_INPUT_PER_VERTEX_DATA, 0},
     };
-    auto posuv_vert = dx11_compile_vertex_shader(device, L"posuv_vert.hlsl", ied, 2);
+    auto posuv_vert = dx11_compile_vertex_shader(device, L"posuv_vert.cso", ied, 2);
 
     return DX11State{
         .swapchain = swapchain,
@@ -309,7 +309,7 @@ DX11State dx11_init() {
 
         .posuv_vert = posuv_vert.shader,
         .posuv_inputlayout = posuv_vert.inputLayout,
-        .yuv2RGB_frag = dx11_compile_pixel_shader(device, L"yuv2RGB_frag.hlsl"),
+        .yuv2RGB_frag = dx11_compile_pixel_shader(device, L"yuv2RGB_frag.cso"),
 
         .quadVertexBuffer = quadVertexBuffer,
         .quadIndexBuffer = quadIndexBuffer,

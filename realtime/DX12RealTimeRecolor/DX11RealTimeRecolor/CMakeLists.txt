@@ -16,7 +16,30 @@ find_path(AVDEVICE_INCLUDE_DIR libavdevice/avdevice.h)
 find_library(AVDEVICE_LIBRARY avdevice)
 
 # Add source to this project's executable.
+set(HLSL_SHADER_FILES "posuv_vert.hlsl" "yuv2RGB_frag.hlsl")
 add_executable (DX11RealTimeRecolor WIN32 "DX11RealTimeRecolor.cpp" "DX11RealTimeRecolor.h" "Utils/windxheaders.h" "posuv_vert.hlsl" "yuv2RGB_frag.hlsl")
+
+# Build HLSL shaders
+add_custom_target(shaders)
+
+set_source_files_properties("posuv_vert.hlsl" PROPERTIES ShaderType "vs")
+set_source_files_properties("yuv2RGB_frag.hlsl" PROPERTIES ShaderType "ps")
+set_source_files_properties(${HLSL_SHADER_FILES} PROPERTIES ShaderModel "5_0")
+
+foreach(FILE ${HLSL_SHADER_FILES})
+  get_filename_component(FILE_WE ${FILE} NAME_WE)
+  get_source_file_property(shadertype ${FILE} ShaderType)
+  get_source_file_property(shadermodel ${FILE} ShaderModel)
+  add_custom_command(TARGET shaders
+                     COMMAND fxc.exe /nologo /Emain /T${shadertype}_${shadermodel} $<IF:$<CONFIG:DEBUG>,/Od,/O1> /Zi /Fo ${CMAKE_BINARY_DIR}/DX11RealTimeRecolor/${FILE_WE}.cso ${FILE}
+                     MAIN_DEPENDENCY ${FILE}
+                     COMMENT "HLSL ${FILE}"
+                     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                     DEPENDS ${FILE}
+                     VERBATIM)
+endforeach(FILE)
+
+add_dependencies(DX11RealTimeRecolor shaders)
 
 # From https://stackoverflow.com/a/48975072/4248422
 target_compile_definitions(DX11RealTimeRecolor PRIVATE "UNICODE" "_UNICODE")
@@ -29,13 +52,6 @@ add_custom_command(
     TARGET DX11RealTimeRecolor
     POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E copy ${_ffmpeg_dlls} $<TARGET_FILE_DIR:DX11RealTimeRecolor>
-)
-
-file(GLOB _shader "${CMAKE_CURRENT_SOURCE_DIR}/*.hlsl")
-add_custom_command(
-    TARGET DX11RealTimeRecolor
-    POST_BUILD
-    COMMAND "${CMAKE_COMMAND}" -E copy ${_shader} $<TARGET_FILE_DIR:DX11RealTimeRecolor>
 )
 
 if (CMAKE_VERSION VERSION_GREATER 3.12)

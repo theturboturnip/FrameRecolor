@@ -48,7 +48,7 @@ float3 ConvertYUVtoRGB(float3 yuv)
 	return saturate(yuv);
 }
 
-min16float4 PS(PixelShaderInput input) : SV_TARGET
+min16float4 main(PixelShaderInput input) : SV_TARGET
 {
 	float y = luminanceChannel.Sample(defaultSampler, input.texCoord);
 	float2 uv = chrominanceChannel.Sample(defaultSampler, input.texCoord);
