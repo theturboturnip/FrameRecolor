@@ -41,6 +41,7 @@ namespace RTR {
 
     struct DX11ColorspaceConstantBuffer {
         DirectX::XMUINT2 texDims;
+        DirectX::XMUINT2 padding;
     };
 
     struct DX11State {
@@ -55,19 +56,25 @@ namespace RTR {
         ComPtr<ID3D11VertexShader> posuv_vert;
         ComPtr<ID3D11InputLayout> posuv_inputlayout;
         ComPtr<ID3D11PixelShader> yuv2RGB_frag;
+        ComPtr<ID3D11ComputeShader> yuv2RGB_comp;
+        ComPtr<ID3D11PixelShader> rgb_frag;
 
         ComPtr<ID3D11Buffer> quadVertexBuffer;
         ComPtr<ID3D11Buffer> quadIndexBuffer;
 
         D3D11_VIEWPORT viewport;
 
-        void enqueueRenderAndPresentForNextFrame(ComPtr<ID3D11Texture2D> frame);
+        void enqueueRenderAndPresentForNextFrame(ComPtr<ID3D11ShaderResourceView> frame);
         void flushAndClose();
+    };
+
+    struct BackingFrameUAVs {
+        ComPtr<ID3D11UnorderedAccessView> lum, chrom;
     };
 
     struct FFMpegPerVideoState {
         AVFormatContext* input_ctx = nullptr;
-        AVCodec* decoder = nullptr;
+        const AVCodec* decoder = nullptr;
         AVCodecContext* decoder_ctx = nullptr;
         int video_stream_index = 0;
         AVStream* video_stream = nullptr;
@@ -76,8 +83,14 @@ namespace RTR {
         AVFrame* frame = nullptr;
 
         D3D11_BOX regionToCopy;
-        ComPtr<ID3D11Texture2D> lastFrameCopyTarget;
+        ComPtr<ID3D11Texture2D> latestFrameAsRgb;
+        ComPtr<ID3D11ShaderResourceView> latestFrameAsRgbSrv;
+        ComPtr<ID3D11UnorderedAccessView> latestFrameAsRgbUav;
+
         ComPtr<ID3D11Buffer> texDimConstantBuffer;
+
+        ComPtr<ID3D11Texture2D> latestBackingFrame = nullptr;
+        std::vector<BackingFrameUAVs> backingFrameUavs;
 
         void readFrame(DX11State& dx11State);
 

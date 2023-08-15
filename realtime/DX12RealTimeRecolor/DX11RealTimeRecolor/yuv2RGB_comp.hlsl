@@ -12,14 +12,12 @@
 //
 //*********************************************************
 
-RWTexture2D<float>  luminanceChannel;
-RWTexture2D<float2> chrominanceChannel;
-
-RWTexture2D<float4> rgb;
+RWTexture2DArray<unorm float> ySource: t0;
+RWTexture2DArray<unorm float2> uvSource: t1;
+RWTexture2D<float4> rgb : t2;
 
 cbuffer CONSTANTS: register(b0) {
-	uint2 texLumDims;
-	uint2 texChromDims;
+	uint2 texDims;
 }
 
 // Derived from https://msdn.microsoft.com/en-us/library/windows/desktop/dd206750(v=vs.85).aspx
@@ -45,10 +43,9 @@ float3 ConvertYUVtoRGB(float3 yuv)
 
 [numthreads(1, 1, 1)]
 void main(uint3 DTid : SV_DispatchThreadID) {
-	if (all(DTid.xy < texLumDims) && all((DTid.xy / 2) < texChromDims)) {
-		float y = luminanceChannel.Load(DTid.xy);
-		float2 uv = chrominanceChannel.Load(DTid.xy / 2);
-
-		rgb[DTid.xy] = float4(ConvertYUVtoRGB(float3(y, uv)), 1.f);
+	if (all(DTid.xy < texDims)) {
+		float y = ySource.Load(uint4(DTid.x, DTid.y, 0, 0));
+		float2 uv = uvSource.Load(uint4(DTid.x / 2, DTid.y / 2, 0, 0));
+		rgb[DTid.xy] = float4(ConvertYUVtoRGB(float3(y, uv.x, uv.y)), 1.f);
 	}
 }

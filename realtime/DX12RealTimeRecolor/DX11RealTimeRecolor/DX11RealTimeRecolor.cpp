@@ -205,21 +205,38 @@ ComPtr<ID3D11PixelShader> dx11_compile_pixel_shader(ComPtr<ID3D11Device>& device
     return pixelShader;
 }
 
-ComPtr<ID3D11Buffer> dx11_create_buffer(ComPtr<ID3D11Device>& device, ComPtr<ID3D11DeviceContext>& deviceContext, const void* srcData, u32 srcDataSizeBytes) {
+ComPtr<ID3D11ComputeShader> dx11_compile_compute_shader(ComPtr<ID3D11Device>& device, _In_ LPCWSTR srcFile) {
+    ID3DBlob* blob = nullptr;
+    ThrowIfFailed(D3DReadFileToBlob(srcFile, &blob));
+
+    ComPtr<ID3D11ComputeShader> computeShader;
+    ThrowIfFailed(device->CreateComputeShader(blob->GetBufferPointer(), blob->GetBufferSize(), NULL, &computeShader));
+
+    return computeShader;
+}
+
+ComPtr<ID3D11Buffer> dx11_create_buffer(ComPtr<ID3D11Device>& device, UINT BindFlags, const void* srcData, u32 srcDataSizeBytes) {
     auto bufferDesc = D3D11_BUFFER_DESC{
         .ByteWidth = srcDataSizeBytes,
         .Usage = D3D11_USAGE_DYNAMIC,
-        .BindFlags = D3D11_BIND_VERTEX_BUFFER | D3D11_BIND_INDEX_BUFFER,
+        .BindFlags = BindFlags,
         .CPUAccessFlags = D3D11_CPU_ACCESS_WRITE
     };
+    auto subresourceData = D3D11_SUBRESOURCE_DATA{
+        .pSysMem = srcData,
+        .SysMemPitch = srcDataSizeBytes,
+        .SysMemSlicePitch = 0
+    };
     ComPtr<ID3D11Buffer> buffer;
-    device->CreateBuffer(&bufferDesc, nullptr, &buffer);
+    ThrowIfFailed(device->CreateBuffer(&bufferDesc, &subresourceData, &buffer));
+    return buffer;
+}
+
+void dx11_write_buffer(ComPtr<ID3D11DeviceContext>& deviceContext, ComPtr<ID3D11Buffer>& buffer, const void* srcData, u32 srcDataSizeBytes) {
     D3D11_MAPPED_SUBRESOURCE ms;
     deviceContext->Map(buffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &ms);
     memcpy(ms.pData, srcData, srcDataSizeBytes);
     deviceContext->Unmap(buffer.Get(), 0);
-
-    return buffer;
 }
 
 
@@ -289,8 +306,8 @@ DX11State dx11_init() {
     ThrowIfFailed(swapchain->GetBuffer(0, IID_PPV_ARGS(&backBufferTex)));
     ThrowIfFailed(device->CreateRenderTargetView(backBufferTex.Get(), NULL, &backBuffer));
 
-    ComPtr<ID3D11Buffer> quadVertexBuffer = dx11_create_buffer(device, deviceContext, vertex_buffer, sizeof(vertex_buffer));
-    ComPtr<ID3D11Buffer> quadIndexBuffer = dx11_create_buffer(device, deviceContext, index_buffer, sizeof(index_buffer));
+    ComPtr<ID3D11Buffer> quadVertexBuffer = dx11_create_buffer(device, D3D11_BIND_VERTEX_BUFFER, vertex_buffer, sizeof(vertex_buffer));
+    ComPtr<ID3D11Buffer> quadIndexBuffer = dx11_create_buffer(device, D3D11_BIND_INDEX_BUFFER, index_buffer, sizeof(index_buffer));
 
     // create the input layout object
     D3D11_INPUT_ELEMENT_DESC ied[] =
@@ -310,6 +327,8 @@ DX11State dx11_init() {
         .posuv_vert = posuv_vert.shader,
         .posuv_inputlayout = posuv_vert.inputLayout,
         .yuv2RGB_frag = dx11_compile_pixel_shader(device, L"yuv2RGB_frag.cso"),
+        .yuv2RGB_comp = dx11_compile_compute_shader(device, L"yuv2RGB_comp.cso"),
+        .rgb_frag = dx11_compile_pixel_shader(device, L"rgb_frag.cso"),
 
         .quadVertexBuffer = quadVertexBuffer,
         .quadIndexBuffer = quadIndexBuffer,
@@ -325,7 +344,7 @@ DX11State dx11_init() {
     };
 }
 
-void DX11State::enqueueRenderAndPresentForNextFrame(ComPtr<ID3D11Texture2D> frame) {
+void DX11State::enqueueRenderAndPresentForNextFrame(ComPtr<ID3D11ShaderResourceView> frame) {
     ID3D11RenderTargetView* targets[] = { backBuffer.Get() };
     deviceContext->OMSetRenderTargets(1, targets, NULL);
     deviceContext->RSSetViewports(1, &viewport);
@@ -336,15 +355,8 @@ void DX11State::enqueueRenderAndPresentForNextFrame(ComPtr<ID3D11Texture2D> fram
 
     // copy the frame in
     if (frame) {
-        ComPtr<ID3D11ShaderResourceView> lastFrameLum = nullptr;
-        ComPtr<ID3D11ShaderResourceView> lastFrameChrom = nullptr;
-        D3D11_SHADER_RESOURCE_VIEW_DESC luminance_desc = CD3D11_SHADER_RESOURCE_VIEW_DESC(frame.Get(), D3D11_SRV_DIMENSION_TEXTURE2D, DXGI_FORMAT_R8_UNORM);
-        device->CreateShaderResourceView(frame.Get(), &luminance_desc, &lastFrameLum); // DXGI_FORMAT_R8G8_UNORM for NV12 chrominance channel
-        D3D11_SHADER_RESOURCE_VIEW_DESC chrominance_desc = CD3D11_SHADER_RESOURCE_VIEW_DESC(frame.Get(), D3D11_SRV_DIMENSION_TEXTURE2D, DXGI_FORMAT_R8G8_UNORM);
-        device->CreateShaderResourceView(frame.Get(), &chrominance_desc, &lastFrameChrom);
-
         deviceContext->VSSetShader(posuv_vert.Get(), nullptr, 0);
-        deviceContext->PSSetShader(yuv2RGB_frag.Get(), nullptr, 0);
+        deviceContext->PSSetShader(rgb_frag.Get(), nullptr, 0);
         deviceContext->IASetInputLayout(posuv_inputlayout.Get());
         deviceContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         UINT vertexStride = sizeof(vertex_buffer[0]);
@@ -353,11 +365,13 @@ void DX11State::enqueueRenderAndPresentForNextFrame(ComPtr<ID3D11Texture2D> fram
         deviceContext->IASetVertexBuffers(0, 1, &vertexBuffer, &vertexStride, &vertexOffset);
         deviceContext->IASetIndexBuffer(quadIndexBuffer.Get(), DXGI_FORMAT_R16_UINT, 0);
         ID3D11ShaderResourceView* shaderResources[] = {
-            lastFrameLum.Get(),
-            lastFrameChrom.Get()
+            frame.Get(),
         };
-        deviceContext->PSSetShaderResources(0, 2, shaderResources);
+        deviceContext->PSSetShaderResources(0, 1, shaderResources);
         deviceContext->DrawIndexed(6, 0, 0);
+        // Unbind resources for FFMPEG stuff to use
+        shaderResources[0] = nullptr;
+        deviceContext->PSSetShaderResources(0, 1, shaderResources);
         //deviceContext->Vertex
         //deviceContext->CopySubresourceRegion(
         //    backBufferTex.Get(), 0, 0, 0, 0,
@@ -383,7 +397,26 @@ void DX11State::flushAndClose() {
 }
 
 // Callback used by 
-AVPixelFormat get_hw_format(AVCodecContext* ctx, const AVPixelFormat* pix_fmts) {
+AVPixelFormat get_hw_format(AVCodecContext* decoder_ctx, const AVPixelFormat* pix_fmts) {
+    // Allocate a custom hwframe_ctx so we can set the bind flags on the generated texture.
+    // This has to be set *inside get_hw_format* for some fucking reason. See docs for hw_frames_ctx
+    AVBufferRef* hw_frames_ref = av_hwframe_ctx_alloc(decoder_ctx->hw_device_ctx);
+    AVHWFramesContext* frames_ctx = (AVHWFramesContext*)(hw_frames_ref->data);
+    frames_ctx->format = AV_PIX_FMT_D3D11;
+    frames_ctx->sw_format = AV_PIX_FMT_NV12; // TODO this doesn't always work
+    frames_ctx->width = (u32)decoder_ctx->width;
+    frames_ctx->height = (u32)decoder_ctx->height;
+    frames_ctx->initial_pool_size = 20; // TODO hardcoded
+    auto* frames_ctx_hw_ctx = (AVD3D11VAFramesContext*)frames_ctx->hwctx;
+    *frames_ctx_hw_ctx = {
+        .texture = nullptr, // let FFMPEG allocate that
+        .BindFlags = D3D11_BIND_DECODER | D3D11_BIND_UNORDERED_ACCESS, // Allow us to read the texture directly with shader resources and unordered access things
+        .MiscFlags = 0,
+        .texture_infos = nullptr,
+    };
+    ThrowIfFfmpegFail(av_hwframe_ctx_init(hw_frames_ref));
+    decoder_ctx->hw_frames_ctx = av_buffer_ref(hw_frames_ref);
+
     for (auto p = pix_fmts; *p != -1; p++) {
         if (*p == AV_PIX_FMT_D3D11)
             return AV_PIX_FMT_D3D11;
@@ -400,8 +433,7 @@ FFMpegPerVideoState ffmpeg_create_decoder(DX11State& dx11State, const char* path
     ThrowIfFfmpegFail(avformat_find_stream_info(state.input_ctx, NULL));
 
     // Find the best video stream, allocating and filling in certain properties of a decoder (but not opening the decoder yet...)
-    // The function specification for this claims to write sometihng into const AVCodec**... breaks const correctness...
-    state.video_stream_index = ThrowIfFfmpegFail(av_find_best_stream(state.input_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, (const AVCodec**) &state.decoder, 0));
+    state.video_stream_index = ThrowIfFfmpegFail(av_find_best_stream(state.input_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, &state.decoder, 0));
     state.video_stream = state.input_ctx->streams[state.video_stream_index];
 
     // Allocate a decoder context, fill it with parameters for the video codec we want and the hardware device context...
@@ -411,39 +443,20 @@ FFMpegPerVideoState ffmpeg_create_decoder(DX11State& dx11State, const char* path
     ThrowIfFfmpegFail(avcodec_parameters_to_context(state.decoder_ctx, state.video_stream->codecpar));
     // Request the D3D11 format
     state.decoder_ctx->get_format = get_hw_format;
-    // ... I think this means there's only one DX11 frame texture, and it gets reused?
-    av_opt_set_int(state.decoder_ctx, "refcounted_frames", 1, 0);
+    //// ... I think this means there's only one DX11 frame texture, and it gets reused?
+    //av_opt_set_int(state.decoder_ctx, "refcounted_frames", 1, 0);
     // Create a hardware device context using the DX11 device, put it into the decoder_ctx
-    {
+    
         AVBufferRef* hw_device_ctx = av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_D3D11VA);
         AVHWDeviceContext* device_ctx = reinterpret_cast<AVHWDeviceContext*>(hw_device_ctx->data);
         AVD3D11VADeviceContext* d3d11va_device_ctx = reinterpret_cast<AVD3D11VADeviceContext*>(device_ctx->hwctx);
         d3d11va_device_ctx->device = dx11State.device.Get();
         state.decoder_ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
-
-        // Allocate a custom hwframe_ctx so we can set the bind flags on the generated texture
-        AVBufferRef* hw_frames_ref = av_hwframe_ctx_alloc(hw_device_ctx);
-        AVHWFramesContext* frames_ctx = (AVHWFramesContext*)(hw_frames_ref->data);
-        frames_ctx->format = AV_PIX_FMT_D3D11;
-        frames_ctx->sw_format = AV_PIX_FMT_NV12;
-        // Note - even though we set this manually, somewhere in ffmpeg the size of the DX11 texture is upped slightly.
-        frames_ctx->width = (u32)state.decoder_ctx->width;
-        frames_ctx->height = (u32)state.decoder_ctx->height;
-        frames_ctx->initial_pool_size = 20;
-        *(AVD3D11VAFramesContext*)frames_ctx->hwctx = {
-            .texture = nullptr, // let FFMPEG allocate that
-            .BindFlags = D3D11_BIND_DECODER | D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE, // Allow us to read the texture directly with shader resources and unordered access things
-            .MiscFlags = 0,
-            .texture_infos = nullptr,
-        };
-        ThrowIfFfmpegFail(av_hwframe_ctx_init(hw_frames_ref));
-
-        state.decoder_ctx->hw_frames_ctx = av_buffer_ref(hw_frames_ref);
         ThrowIfFfmpegFail(av_hwdevice_ctx_init(state.decoder_ctx->hw_device_ctx));
 
-        av_buffer_unref(&hw_frames_ref);
-        av_buffer_unref(&hw_device_ctx);
-    }
+        //av_buffer_unref(&hw_frames_ref);
+        //av_buffer_unref(&hw_device_ctx);
+    
 
     // Decoder context now has all parameters filled in, now actually open the decoder
     ThrowIfFfmpegFail(avcodec_open2(state.decoder_ctx, state.decoder, NULL));
@@ -476,23 +489,24 @@ FFMpegPerVideoState ffmpeg_create_decoder(DX11State& dx11State, const char* path
         .Height = (u32)state.decoder_ctx->height,
         .MipLevels = 1,
         .ArraySize = 1,
-        // TODO this isn't always right - it isn't for the 4k
-        .Format = DXGI_FORMAT_NV12,
+        .Format = DXGI_FORMAT_R8G8B8A8_UNORM,
         .SampleDesc = DXGI_SAMPLE_DESC {
             .Count = 1,
             .Quality = 0
         },
         .Usage = D3D11_USAGE_DEFAULT,
-        .BindFlags = D3D11_BIND_SHADER_RESOURCE,
+        .BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
         .CPUAccessFlags = 0,
         .MiscFlags = 0
     };
-    ThrowIfFailed(dx11State.device->CreateTexture2D(&frameDesc, NULL, &state.lastFrameCopyTarget));
+    ThrowIfFailed(dx11State.device->CreateTexture2D(&frameDesc, NULL, &state.latestFrameAsRgb));
+    ThrowIfFailed(dx11State.device->CreateShaderResourceView(state.latestFrameAsRgb.Get(), nullptr, &state.latestFrameAsRgbSrv));
+    ThrowIfFailed(dx11State.device->CreateUnorderedAccessView(state.latestFrameAsRgb.Get(), nullptr, &state.latestFrameAsRgbUav));
 
     DX11ColorspaceConstantBuffer buf = {
         .texDims = DirectX::XMUINT2((u32)state.decoder_ctx->width, (u32)state.decoder_ctx->height),
     };
-    state.texDimConstantBuffer = dx11_create_buffer(dx11State.device, dx11State.deviceContext, &buf, sizeof(buf));
+    state.texDimConstantBuffer = dx11_create_buffer(dx11State.device, D3D11_BIND_CONSTANT_BUFFER, &buf, sizeof(buf));
 
     return state;
 }
@@ -508,14 +522,73 @@ void FFMpegPerVideoState::readFrame(DX11State& dx11State) {
     int ret = avcodec_receive_frame(decoder_ctx, frame);
     switch (ret) {
     case 0: {
-        auto latestFrame = (ID3D11Texture2D*)frame->data[0];
+        auto newBackingFrame = (ID3D11Texture2D*)frame->data[0];
+        if (latestBackingFrame.Get() != newBackingFrame) {
+            latestBackingFrame = newBackingFrame;
+
+            D3D11_TEXTURE2D_DESC desc;
+            latestBackingFrame->GetDesc(&desc);
+
+            backingFrameUavs.clear();
+            for (u32 i = 0; i < 20; i++) { // todo hardcoded
+                auto uavs = BackingFrameUAVs{};
+
+                auto uavLumDesc = D3D11_UNORDERED_ACCESS_VIEW_DESC{
+                    .Format = DXGI_FORMAT_R8_UNORM,
+                    .ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2DARRAY,
+                    .Texture2DArray = {
+                        .MipSlice = 0,
+                        .FirstArraySlice = i,
+                        .ArraySize = 1,
+                    }
+                };
+                ThrowIfFailed(dx11State.device->CreateUnorderedAccessView(newBackingFrame, &uavLumDesc, &uavs.lum));
+
+                auto uavChromDesc = D3D11_UNORDERED_ACCESS_VIEW_DESC{
+                    .Format = DXGI_FORMAT_R8G8_UNORM,
+                    .ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2DARRAY,
+                    .Texture2DArray = {
+                        .MipSlice = 0,
+                        .FirstArraySlice = i,
+                        .ArraySize = 1,
+                    }
+                };
+                ThrowIfFailed(dx11State.device->CreateUnorderedAccessView(newBackingFrame, &uavChromDesc, &uavs.chrom));
+                
+                backingFrameUavs.push_back(uavs);
+            }
+            
+        }
+
         const int texture_index = (intptr_t)frame->data[1];
-        dx11State.deviceContext->CopySubresourceRegion(
-            lastFrameCopyTarget.Get(), 0, // subresource#0 of lastFrameCopyTarget
-            0, 0, 0, // DstXYZ
-            latestFrame, texture_index,
-            &regionToCopy
-        );
+        DX11ColorspaceConstantBuffer buf = {
+            .texDims = DirectX::XMUINT2((u32)decoder_ctx->width, (u32)decoder_ctx->height),
+        };
+        dx11_write_buffer(dx11State.deviceContext, texDimConstantBuffer, &buf, sizeof(buf));
+
+        dx11State.deviceContext->CSSetShader(dx11State.yuv2RGB_comp.Get(), nullptr, 0);
+        ID3D11UnorderedAccessView* uavs[] = {
+            backingFrameUavs[texture_index].lum.Get(),
+            backingFrameUavs[texture_index].chrom.Get(),
+            latestFrameAsRgbUav.Get()
+        };
+        dx11State.deviceContext->CSSetUnorderedAccessViews(0, 3, uavs, nullptr);
+        auto* cbuf = texDimConstantBuffer.Get();
+        dx11State.deviceContext->CSSetConstantBuffers(0, 1, &cbuf);
+        dx11State.deviceContext->Dispatch(buf.texDims.x, buf.texDims.y, 1);
+
+        // Unbind resources for other rendering to use
+        uavs[0] = nullptr;
+        uavs[1] = nullptr;
+        uavs[2] = nullptr;
+        dx11State.deviceContext->CSSetUnorderedAccessViews(0, 3, uavs, nullptr);
+
+        //dx11State.deviceContext->CopySubresourceRegion(
+        //    lastFrameCopyTarget.Get(), 0, // subresource#0 of lastFrameCopyTarget
+        //    0, 0, 0, // DstXYZ
+        //    latestFrame, texture_index,
+        //    &regionToCopy
+        //);
         break;
     }
     case AVERROR_EOF:
@@ -559,7 +632,7 @@ int CALLBACK wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdL
         DX11State dx11State = dx11_init();
         g_dx11Initialized = true;
         FFMpegPerVideoState ffmpeg480 = ffmpeg_create_decoder(dx11State, "../../../../480p.mp4");
-        FFMpegPerVideoState ffmpeg2160 = ffmpeg_create_decoder(dx11State, "../../../../2160p.mkv");
+        //FFMpegPerVideoState ffmpeg2160 = ffmpeg_create_decoder(dx11State, "../../../../2160p.mkv");
 
         ::ShowWindow(g_windowState.hWnd, SW_SHOW);
 
@@ -573,13 +646,13 @@ int CALLBACK wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdL
             }
             else {
                 ffmpeg480.readFrame(dx11State);
-                ffmpeg2160.readFrame(dx11State);
-                dx11State.enqueueRenderAndPresentForNextFrame(ffmpeg480.lastFrameCopyTarget);
+                //ffmpeg2160.readFrame(dx11State);
+                dx11State.enqueueRenderAndPresentForNextFrame(ffmpeg480.latestFrameAsRgbSrv);
             }
         }
 
         // Make sure the command queue has finished all commands before closing.
-        ffmpeg2160.flushAndClose();
+        //ffmpeg2160.flushAndClose();
         ffmpeg480.flushAndClose();
         dx11State.flushAndClose();
     }
