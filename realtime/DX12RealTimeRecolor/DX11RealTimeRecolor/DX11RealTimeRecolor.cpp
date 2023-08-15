@@ -45,11 +45,12 @@ bool g_dx11Initialized = false;
 LRESULT CALLBACK window_message_callback(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     if (!g_dx11Initialized) return ::DefWindowProc(hWnd, uMsg, wParam, lParam);
     switch (uMsg) {
+    case WM_CLOSE:
+        DestroyWindow(hWnd);
+        return 0;
     case WM_DESTROY:
         ::PostQuitMessage(0);
-        break;
-    case WM_PAINT:
-        break;
+        return 0;
     }
     return ::DefWindowProc(hWnd, uMsg, wParam, lParam);
 }
@@ -131,6 +132,97 @@ WindowState create_window(
     };
 }
 
+// from https://learn.microsoft.com/en-us/windows/win32/direct3d11/how-to--compile-a-shader
+HRESULT dx11_compile_shader_blob(_In_ LPCWSTR srcFile, _In_ LPCSTR entryPoint, _In_ LPCSTR profile, _Outptr_ ID3DBlob** blob) {
+    if (!srcFile || !entryPoint || !profile || !blob)
+        return E_INVALIDARG;
+
+    *blob = nullptr;
+
+    UINT flags = D3DCOMPILE_ENABLE_STRICTNESS;
+#if defined( DEBUG ) || defined( _DEBUG )
+    flags |= D3DCOMPILE_DEBUG;
+#endif
+
+    const D3D_SHADER_MACRO defines[] =
+    {
+        "EXAMPLE_DEFINE", "1",
+        NULL, NULL
+    };
+
+    ID3DBlob* shaderBlob = nullptr;
+    ID3DBlob* errorBlob = nullptr;
+    HRESULT hr = D3DCompileFromFile(srcFile, defines, D3D_COMPILE_STANDARD_FILE_INCLUDE,
+        entryPoint, profile,
+        flags, 0, &shaderBlob, &errorBlob);
+    if (FAILED(hr))
+    {
+        if (errorBlob)
+        {
+            OutputDebugStringA((char*)errorBlob->GetBufferPointer());
+            errorBlob->Release();
+        }
+
+        if (shaderBlob)
+            shaderBlob->Release();
+
+        return hr;
+    }
+
+    *blob = shaderBlob;
+
+    return hr;
+}
+
+struct DX11VertexShaderStuff {
+    ComPtr<ID3D11VertexShader> shader;
+    ComPtr<ID3D11InputLayout> inputLayout;
+};
+
+DX11VertexShaderStuff dx11_compile_vertex_shader(ComPtr<ID3D11Device>& device, _In_ LPCWSTR srcFile, D3D11_INPUT_ELEMENT_DESC* pInputElementDescs, u32 NumElements) {
+    ID3DBlob* blob = nullptr;
+    ThrowIfFailed(dx11_compile_shader_blob(srcFile, "VS", "vs_5_0", &blob));
+
+    ComPtr<ID3D11VertexShader> vertexShader;
+    ThrowIfFailed(device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), NULL, &vertexShader));
+
+    ComPtr<ID3D11InputLayout> inputLayout;
+    ThrowIfFailed(device->CreateInputLayout(pInputElementDescs, NumElements, blob->GetBufferPointer(), blob->GetBufferSize(), &inputLayout));
+
+    return {
+        .shader = vertexShader,
+        .inputLayout = inputLayout
+    };
+}
+
+ComPtr<ID3D11PixelShader> dx11_compile_pixel_shader(ComPtr<ID3D11Device>& device, _In_ LPCWSTR srcFile) {
+    ID3DBlob* blob = nullptr;
+    ThrowIfFailed(dx11_compile_shader_blob(srcFile, "PS", "ps_5_0", &blob));
+
+    ComPtr<ID3D11PixelShader> pixelShader;
+    ThrowIfFailed(device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), NULL, &pixelShader));
+
+    return pixelShader;
+}
+
+ComPtr<ID3D11Buffer> dx11_create_buffer(ComPtr<ID3D11Device>& device, ComPtr<ID3D11DeviceContext>& deviceContext, const void* srcData, u32 srcDataSizeBytes) {
+    auto bufferDesc = D3D11_BUFFER_DESC{
+        .ByteWidth = srcDataSizeBytes,
+        .Usage = D3D11_USAGE_DYNAMIC,
+        .BindFlags = D3D11_BIND_VERTEX_BUFFER | D3D11_BIND_INDEX_BUFFER,
+        .CPUAccessFlags = D3D11_CPU_ACCESS_WRITE
+    };
+    ComPtr<ID3D11Buffer> buffer;
+    device->CreateBuffer(&bufferDesc, nullptr, &buffer);
+    D3D11_MAPPED_SUBRESOURCE ms;
+    deviceContext->Map(buffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &ms);
+    memcpy(ms.pData, srcData, srcDataSizeBytes);
+    deviceContext->Unmap(buffer.Get(), 0);
+
+    return buffer;
+}
+
+
 DX11State dx11_init() {
     assert(g_windowInitialized);
 
@@ -154,9 +246,10 @@ DX11State dx11_init() {
             .Quality = 0,
         },
         .BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT,
-        .BufferCount = 1,
+        .BufferCount = NUM_INFLIGHT_FRAMES,
         .OutputWindow = g_windowState.hWnd,
         .Windowed = true,
+        .SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
     };
 
     ComPtr<IDXGISwapChain> swapchain = nullptr;
@@ -165,7 +258,7 @@ DX11State dx11_init() {
 
     D3D_FEATURE_LEVEL featureLevels[] =
     {
-        D3D_FEATURE_LEVEL_11_0
+        D3D_FEATURE_LEVEL_11_0,
     };
 
     ThrowIfFailed(D3D11CreateDeviceAndSwapChain(
@@ -186,10 +279,26 @@ DX11State dx11_init() {
         &deviceContext
     ));
 
+    ComPtr<IDXGIFactory1> factory;
+    if (SUCCEEDED(swapchain->GetParent(IID_PPV_ARGS(&factory)))) {
+        factory->MakeWindowAssociation(g_windowState.hWnd, DXGI_MWA_NO_WINDOW_CHANGES);
+    }
+
     ComPtr<ID3D11Texture2D> backBufferTex;
     ComPtr<ID3D11RenderTargetView> backBuffer;
     ThrowIfFailed(swapchain->GetBuffer(0, IID_PPV_ARGS(&backBufferTex)));
     ThrowIfFailed(device->CreateRenderTargetView(backBufferTex.Get(), NULL, &backBuffer));
+
+    ComPtr<ID3D11Buffer> quadVertexBuffer = dx11_create_buffer(device, deviceContext, vertex_buffer, sizeof(vertex_buffer));
+    ComPtr<ID3D11Buffer> quadIndexBuffer = dx11_create_buffer(device, deviceContext, index_buffer, sizeof(index_buffer));
+
+    // create the input layout object
+    D3D11_INPUT_ELEMENT_DESC ied[] =
+    {
+        {"POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0},
+    };
+    auto posuv_vert = dx11_compile_vertex_shader(device, L"posuv_vert.hlsl", ied, 2);
 
     return DX11State{
         .swapchain = swapchain,
@@ -197,13 +306,21 @@ DX11State dx11_init() {
         .deviceContext = deviceContext,
 
         .backBuffer = backBuffer,
-        .backBufferTex = backBufferTex,
+
+        .posuv_vert = posuv_vert.shader,
+        .posuv_inputlayout = posuv_vert.inputLayout,
+        .yuv2RGB_frag = dx11_compile_pixel_shader(device, L"yuv2RGB_frag.hlsl"),
+
+        .quadVertexBuffer = quadVertexBuffer,
+        .quadIndexBuffer = quadIndexBuffer,
 
         .viewport = {
             .TopLeftX = 0,
             .TopLeftY = 0,
             .Width = g_windowState.clientWidth * 1.0f,
             .Height = g_windowState.clientHeight * 1.0f,
+            .MinDepth = 0,
+            .MaxDepth = 1,
         }
     };
 }
@@ -219,15 +336,47 @@ void DX11State::enqueueRenderAndPresentForNextFrame(ComPtr<ID3D11Texture2D> fram
 
     // copy the frame in
     if (frame) {
+        ComPtr<ID3D11ShaderResourceView> lastFrameLum = nullptr;
+        ComPtr<ID3D11ShaderResourceView> lastFrameChrom = nullptr;
+        D3D11_SHADER_RESOURCE_VIEW_DESC luminance_desc = CD3D11_SHADER_RESOURCE_VIEW_DESC(frame.Get(), D3D11_SRV_DIMENSION_TEXTURE2D, DXGI_FORMAT_R8_UNORM);
+        device->CreateShaderResourceView(frame.Get(), &luminance_desc, &lastFrameLum); // DXGI_FORMAT_R8G8_UNORM for NV12 chrominance channel
+        D3D11_SHADER_RESOURCE_VIEW_DESC chrominance_desc = CD3D11_SHADER_RESOURCE_VIEW_DESC(frame.Get(), D3D11_SRV_DIMENSION_TEXTURE2D, DXGI_FORMAT_R8G8_UNORM);
+        device->CreateShaderResourceView(frame.Get(), &chrominance_desc, &lastFrameChrom);
+
+        deviceContext->VSSetShader(posuv_vert.Get(), nullptr, 0);
+        deviceContext->PSSetShader(yuv2RGB_frag.Get(), nullptr, 0);
+        deviceContext->IASetInputLayout(posuv_inputlayout.Get());
+        deviceContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        UINT vertexStride = sizeof(vertex_buffer[0]);
+        UINT vertexOffset = 0;
+        auto vertexBuffer = quadVertexBuffer.Get();
+        deviceContext->IASetVertexBuffers(0, 1, &vertexBuffer, &vertexStride, &vertexOffset);
+        deviceContext->IASetIndexBuffer(quadIndexBuffer.Get(), DXGI_FORMAT_R16_UINT, 0);
+        ID3D11ShaderResourceView* shaderResources[] = {
+            lastFrameLum.Get(),
+            lastFrameChrom.Get()
+        };
+        deviceContext->PSSetShaderResources(0, 2, shaderResources);
+        deviceContext->DrawIndexed(6, 0, 0);
+        //deviceContext->Vertex
         //deviceContext->CopySubresourceRegion(
         //    backBufferTex.Get(), 0, 0, 0, 0,
         //    frame.Get(), 0, nullptr);
     }
 
     // switch the back buffer and the front buffer
-    swapchain->Present(0, 0);
+    swapchain->Present(1, 0);
 }
 void DX11State::flushAndClose() {
+    quadIndexBuffer.Reset();
+    quadVertexBuffer.Reset();
+
+    yuv2RGB_frag.Reset();
+    posuv_inputlayout.Reset();
+    posuv_vert.Reset();
+
+    backBuffer.Reset();
+
     deviceContext.Reset();
     device.Reset();
     swapchain.Reset();
@@ -280,10 +429,37 @@ FFMpegPerVideoState ffmpeg_create_decoder(DX11State& dx11State, const char* path
     state.packet = av_packet_alloc();
     state.frame = av_frame_alloc();
 
+    //UINT Width;
+    //UINT Height;
+    //UINT MipLevels;
+    //UINT ArraySize;
+    //DXGI_FORMAT Format;
+    //DXGI_SAMPLE_DESC SampleDesc;
+    //D3D11_USAGE Usage;
+    //UINT BindFlags;
+    //UINT CPUAccessFlags;
+    //UINT MiscFlags;
+    auto frameDesc = D3D11_TEXTURE2D_DESC{
+        .Width = (u32)state.video_stream->codecpar->width,
+        .Height = (u32)state.video_stream->codecpar->height,
+        .MipLevels = 1,
+        .ArraySize = 1,
+        .Format = DXGI_FORMAT_NV12,
+        .SampleDesc = DXGI_SAMPLE_DESC {
+            .Count = 1,
+            .Quality = 0
+        },
+        .Usage = D3D11_USAGE_DEFAULT,
+        .BindFlags = D3D11_BIND_SHADER_RESOURCE,
+        .CPUAccessFlags = 0,
+        .MiscFlags = 0
+    };
+    ThrowIfFailed(dx11State.device->CreateTexture2D(&frameDesc, NULL, &state.lastFrameCopyTarget));
+
     return state;
 }
 
-void FFMpegPerVideoState::readFrame() {
+void FFMpegPerVideoState::readFrame(DX11State& dx11State) {
     do {
         av_packet_unref(packet);
         ThrowIfFfmpegFail(av_read_frame(input_ctx, packet));
@@ -293,12 +469,17 @@ void FFMpegPerVideoState::readFrame() {
     
     int ret = avcodec_receive_frame(decoder_ctx, frame);
     switch (ret) {
-    case 0:
-        this->latestFrame = (ID3D11Texture2D*)frame->data[0];
+    case 0: {
+        auto latestFrame = (ID3D11Texture2D*)frame->data[0];
+        const int texture_index = (int)frame->data[1];
+        dx11State.deviceContext->CopySubresourceRegion(
+            lastFrameCopyTarget.Get(), 0, 0, 0, 0,
+            latestFrame, texture_index, nullptr);
         break;
+    }
     case AVERROR_EOF:
     case AVERROR(EAGAIN):
-        this->latestFrame = nullptr; // Don't copy more stuff around, hopefully frame is still valid with the last frame of the video...
+        // Don't copy more stuff around, hopefully frame is still valid with the last frame of the video...
         break;
     case AVERROR(EINVAL):
         ThrowIfFfmpegFail(ret);
@@ -335,6 +516,7 @@ int CALLBACK wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdL
 
     {
         DX11State dx11State = dx11_init();
+        g_dx11Initialized = true;
         FFMpegPerVideoState ffmpeg480 = ffmpeg_create_decoder(dx11State, "../../../../480p.mp4");
         //FFMpegPerVideoState ffmpeg2160 = ffmpeg_create_decoder(dx11State, "../../../../2160p.mkv");
 
@@ -349,10 +531,8 @@ int CALLBACK wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdL
                 ::DispatchMessage(&msg);
             }
             else {
-                if (ffmpeg480.latestFrame == nullptr) {
-                    ffmpeg480.readFrame();
-                }
-                dx11State.enqueueRenderAndPresentForNextFrame(ffmpeg480.latestFrame);
+                ffmpeg480.readFrame(dx11State);
+                dx11State.enqueueRenderAndPresentForNextFrame(ffmpeg480.lastFrameCopyTarget);
             }
         }
 

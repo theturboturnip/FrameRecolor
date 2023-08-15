@@ -16,7 +16,7 @@ find_path(AVDEVICE_INCLUDE_DIR libavdevice/avdevice.h)
 find_library(AVDEVICE_LIBRARY avdevice)
 
 # Add source to this project's executable.
-add_executable (DX11RealTimeRecolor WIN32 "DX11RealTimeRecolor.cpp" "DX11RealTimeRecolor.h" "Utils/windxheaders.h")
+add_executable (DX11RealTimeRecolor WIN32 "DX11RealTimeRecolor.cpp" "DX11RealTimeRecolor.h" "Utils/windxheaders.h" "posuv_vert.hlsl" "yuv2RGB_frag.hlsl")
 
 # From https://stackoverflow.com/a/48975072/4248422
 target_compile_definitions(DX11RealTimeRecolor PRIVATE "UNICODE" "_UNICODE")
