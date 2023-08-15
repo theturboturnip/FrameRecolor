@@ -72,6 +72,12 @@ namespace RTR {
         ComPtr<ID3D11UnorderedAccessView> lum, chrom;
     };
 
+    struct FfmpegInternalTextureStats {
+        u32 content_width, content_height;
+        u32 surface_width, surface_height;
+        u32 num_surfaces;
+    };
+
     struct FFMpegPerVideoState {
         AVFormatContext* input_ctx = nullptr;
         const AVCodec* decoder = nullptr;
@@ -82,10 +88,13 @@ namespace RTR {
         AVPacket* packet = nullptr;
         AVFrame* frame = nullptr;
 
+        FfmpegInternalTextureStats stats;
+
         D3D11_BOX regionToCopy;
         ComPtr<ID3D11Texture2D> latestFrameAsRgb;
         ComPtr<ID3D11ShaderResourceView> latestFrameAsRgbSrv;
         ComPtr<ID3D11UnorderedAccessView> latestFrameAsRgbUav;
+        void updateBackingFrame(DX11State& dx11State, ID3D11Texture2D* newBackingFrame);
 
         ComPtr<ID3D11Buffer> texDimConstantBuffer;
 
