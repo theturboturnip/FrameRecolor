@@ -24,5 +24,9 @@ struct VS_OUTPUT
 //--------------------------------------------------------------------------------------
 VS_OUTPUT VS(VS_INPUT input)
 {
-    return input;
+    VS_OUTPUT OUT;
+
+    OUT.Pos = float4(input.Pos.x, input.Pos.y, 0, 1);
+    OUT.Tex = input.Tex;
+    return OUT;
 }

@@ -53,6 +53,5 @@ min16float4 PS(PixelShaderInput input) : SV_TARGET
 	float y = luminanceChannel.Sample(defaultSampler, input.texCoord);
 	float2 uv = chrominanceChannel.Sample(defaultSampler, input.texCoord);
 
-	//return min16float4(ConvertYUVtoRGB(float3(y, uv)), 1.f);
-	return min16float4(input.texCoord.x, input.texCoord.y, 0.f, 1.f);
+	return min16float4(ConvertYUVtoRGB(float3(y, uv)), 1.f);
 }

@@ -19,6 +19,7 @@ namespace RTR {
     constexpr struct {
         float x, y, z, w;
         float u, v;
+        float pad0, pad1;
     } vertex_buffer[4] = {
         { .x = -1, .y = -1, .z = 0, .w = 0, .u = 0, .v = 0 },
         { .x = -1, .y = 1, .z = 0, .w = 0, .u = 0, .v = 1 },
