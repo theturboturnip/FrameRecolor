@@ -39,6 +39,10 @@ namespace RTR {
         UINT clientHeight;
     };
 
+    struct DX11ColorspaceConstantBuffer {
+        DirectX::XMUINT2 texDims;
+    };
+
     struct DX11State {
         ComPtr<IDXGISwapChain> swapchain;
         ComPtr<ID3D11Device> device;
@@ -71,7 +75,9 @@ namespace RTR {
         AVPacket* packet = nullptr;
         AVFrame* frame = nullptr;
 
+        D3D11_BOX regionToCopy;
         ComPtr<ID3D11Texture2D> lastFrameCopyTarget;
+        ComPtr<ID3D11Buffer> texDimConstantBuffer;
 
         void readFrame(DX11State& dx11State);
 

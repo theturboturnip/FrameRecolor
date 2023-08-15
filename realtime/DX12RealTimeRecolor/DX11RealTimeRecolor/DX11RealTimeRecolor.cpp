@@ -420,7 +420,29 @@ FFMpegPerVideoState ffmpeg_create_decoder(DX11State& dx11State, const char* path
         AVD3D11VADeviceContext* d3d11va_device_ctx = reinterpret_cast<AVD3D11VADeviceContext*>(device_ctx->hwctx);
         d3d11va_device_ctx->device = dx11State.device.Get();
         state.decoder_ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
-        av_hwdevice_ctx_init(state.decoder_ctx->hw_device_ctx);
+
+        // Allocate a custom hwframe_ctx so we can set the bind flags on the generated texture
+        AVBufferRef* hw_frames_ref = av_hwframe_ctx_alloc(hw_device_ctx);
+        AVHWFramesContext* frames_ctx = (AVHWFramesContext*)(hw_frames_ref->data);
+        frames_ctx->format = AV_PIX_FMT_D3D11;
+        frames_ctx->sw_format = AV_PIX_FMT_NV12;
+        // Note - even though we set this manually, somewhere in ffmpeg the size of the DX11 texture is upped slightly.
+        frames_ctx->width = (u32)state.decoder_ctx->width;
+        frames_ctx->height = (u32)state.decoder_ctx->height;
+        frames_ctx->initial_pool_size = 20;
+        *(AVD3D11VAFramesContext*)frames_ctx->hwctx = {
+            .texture = nullptr, // let FFMPEG allocate that
+            .BindFlags = D3D11_BIND_DECODER | D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE, // Allow us to read the texture directly with shader resources and unordered access things
+            .MiscFlags = 0,
+            .texture_infos = nullptr,
+        };
+        ThrowIfFfmpegFail(av_hwframe_ctx_init(hw_frames_ref));
+
+        state.decoder_ctx->hw_frames_ctx = av_buffer_ref(hw_frames_ref);
+        ThrowIfFfmpegFail(av_hwdevice_ctx_init(state.decoder_ctx->hw_device_ctx));
+
+        av_buffer_unref(&hw_frames_ref);
+        av_buffer_unref(&hw_device_ctx);
     }
 
     // Decoder context now has all parameters filled in, now actually open the decoder
@@ -428,6 +450,16 @@ FFMpegPerVideoState ffmpeg_create_decoder(DX11State& dx11State, const char* path
 
     state.packet = av_packet_alloc();
     state.frame = av_frame_alloc();
+
+    state.regionToCopy = D3D11_BOX{
+        .left = 0,
+        .top = 0,
+        .front = 0,
+
+        .right = (u32)state.decoder_ctx->width,
+        .bottom = (u32)state.decoder_ctx->height,
+        .back = 1
+    };
 
     //UINT Width;
     //UINT Height;
@@ -440,10 +472,11 @@ FFMpegPerVideoState ffmpeg_create_decoder(DX11State& dx11State, const char* path
     //UINT CPUAccessFlags;
     //UINT MiscFlags;
     auto frameDesc = D3D11_TEXTURE2D_DESC{
-        .Width = (u32)state.video_stream->codecpar->width,
-        .Height = (u32)state.video_stream->codecpar->height,
+        .Width = (u32)state.decoder_ctx->width,
+        .Height = (u32)state.decoder_ctx->height,
         .MipLevels = 1,
         .ArraySize = 1,
+        // TODO this isn't always right - it isn't for the 4k
         .Format = DXGI_FORMAT_NV12,
         .SampleDesc = DXGI_SAMPLE_DESC {
             .Count = 1,
@@ -455,6 +488,11 @@ FFMpegPerVideoState ffmpeg_create_decoder(DX11State& dx11State, const char* path
         .MiscFlags = 0
     };
     ThrowIfFailed(dx11State.device->CreateTexture2D(&frameDesc, NULL, &state.lastFrameCopyTarget));
+
+    DX11ColorspaceConstantBuffer buf = {
+        .texDims = DirectX::XMUINT2((u32)state.decoder_ctx->width, (u32)state.decoder_ctx->height),
+    };
+    state.texDimConstantBuffer = dx11_create_buffer(dx11State.device, dx11State.deviceContext, &buf, sizeof(buf));
 
     return state;
 }
@@ -471,10 +509,13 @@ void FFMpegPerVideoState::readFrame(DX11State& dx11State) {
     switch (ret) {
     case 0: {
         auto latestFrame = (ID3D11Texture2D*)frame->data[0];
-        const int texture_index = (int)frame->data[1];
+        const int texture_index = (intptr_t)frame->data[1];
         dx11State.deviceContext->CopySubresourceRegion(
-            lastFrameCopyTarget.Get(), 0, 0, 0, 0,
-            latestFrame, texture_index, nullptr);
+            lastFrameCopyTarget.Get(), 0, // subresource#0 of lastFrameCopyTarget
+            0, 0, 0, // DstXYZ
+            latestFrame, texture_index,
+            &regionToCopy
+        );
         break;
     }
     case AVERROR_EOF:
@@ -518,7 +559,7 @@ int CALLBACK wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdL
         DX11State dx11State = dx11_init();
         g_dx11Initialized = true;
         FFMpegPerVideoState ffmpeg480 = ffmpeg_create_decoder(dx11State, "../../../../480p.mp4");
-        //FFMpegPerVideoState ffmpeg2160 = ffmpeg_create_decoder(dx11State, "../../../../2160p.mkv");
+        FFMpegPerVideoState ffmpeg2160 = ffmpeg_create_decoder(dx11State, "../../../../2160p.mkv");
 
         ::ShowWindow(g_windowState.hWnd, SW_SHOW);
 
@@ -532,11 +573,13 @@ int CALLBACK wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdL
             }
             else {
                 ffmpeg480.readFrame(dx11State);
+                ffmpeg2160.readFrame(dx11State);
                 dx11State.enqueueRenderAndPresentForNextFrame(ffmpeg480.lastFrameCopyTarget);
             }
         }
 
         // Make sure the command queue has finished all commands before closing.
+        ffmpeg2160.flushAndClose();
         ffmpeg480.flushAndClose();
         dx11State.flushAndClose();
     }
