@@ -16,7 +16,7 @@ find_path(AVDEVICE_INCLUDE_DIR libavdevice/avdevice.h)
 find_library(AVDEVICE_LIBRARY avdevice)
 
 # Add source to this project's executable.
-set(HLSL_SHADER_FILES "posuv_vert.hlsl" "yuv2RGB_frag.hlsl" "posuv_vert.hlsl" "yuv2RGB_frag.hlsl" "yuv2RGB_comp.hlsl" "rgb_frag.hlsl")
+set(HLSL_SHADER_FILES "posuv_vert.hlsl" "yuv_bt601_to_rgb_frag.hlsl" "yuv_bt601_to_rgb_comp.hlsl" "rgb_frag.hlsl" "yuv_rec2020_to_cielab_comp.hlsl")
 add_executable (DX11RealTimeRecolor WIN32 "DX11RealTimeRecolor.cpp" "DX11RealTimeRecolor.h" "Utils/windxheaders.h" ${HLSL_SHADER_FILES})
 
 # Build HLSL shaders
@@ -24,8 +24,9 @@ add_custom_target(shaders)
 
 set_source_files_properties("posuv_vert.hlsl" PROPERTIES ShaderType "vs")
 set_source_files_properties("rgb_frag.hlsl" PROPERTIES ShaderType "ps")
-set_source_files_properties("yuv2RGB_frag.hlsl" PROPERTIES ShaderType "ps")
-set_source_files_properties("yuv2RGB_comp.hlsl" PROPERTIES ShaderType "cs")
+set_source_files_properties("yuv_bt601_to_rgb_frag.hlsl" PROPERTIES ShaderType "ps")
+set_source_files_properties("yuv_rec2020_to_cielab_comp.hlsl" PROPERTIES ShaderType "cs")
+set_source_files_properties("yuv_bt601_to_rgb_comp.hlsl" PROPERTIES ShaderType "cs")
 set_source_files_properties(${HLSL_SHADER_FILES} PROPERTIES ShaderModel "5_0")
 
 foreach(FILE ${HLSL_SHADER_FILES})
@@ -37,7 +38,7 @@ foreach(FILE ${HLSL_SHADER_FILES})
                      MAIN_DEPENDENCY ${FILE}
                      COMMENT "HLSL ${FILE}"
                      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-                     DEPENDS ${FILE}
+                     DEPENDS ${FILE} "${CMAKE_CURRENT_SOURCE_DIR}/includes.hlsl"
                      VERBATIM)
 endforeach(FILE)
 

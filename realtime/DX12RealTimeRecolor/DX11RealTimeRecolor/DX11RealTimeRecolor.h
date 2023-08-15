@@ -55,9 +55,10 @@ namespace RTR {
 
         ComPtr<ID3D11VertexShader> posuv_vert;
         ComPtr<ID3D11InputLayout> posuv_inputlayout;
-        ComPtr<ID3D11PixelShader> yuv2RGB_frag;
-        ComPtr<ID3D11ComputeShader> yuv2RGB_comp;
+        ComPtr<ID3D11PixelShader> yuv_bt601_to_rgb_frag;
+        ComPtr<ID3D11ComputeShader> yuv_bt601_to_rgb_comp;
         ComPtr<ID3D11PixelShader> rgb_frag;
+        ComPtr<ID3D11ComputeShader> yuv_rec2020_to_cielab_comp;
 
         ComPtr<ID3D11Buffer> quadVertexBuffer;
         ComPtr<ID3D11Buffer> quadIndexBuffer;
@@ -94,12 +95,15 @@ namespace RTR {
         ComPtr<ID3D11Texture2D> latestFrameAsRgb;
         ComPtr<ID3D11ShaderResourceView> latestFrameAsRgbSrv;
         ComPtr<ID3D11UnorderedAccessView> latestFrameAsRgbUav;
-        void updateBackingFrame(DX11State& dx11State, ID3D11Texture2D* newBackingFrame);
+        ComPtr<ID3D11Texture2D> latestFrameAsLab;
+        ComPtr<ID3D11ShaderResourceView> latestFrameAsLabSrv;
+        ComPtr<ID3D11UnorderedAccessView> latestFrameAsLabUav;
 
         ComPtr<ID3D11Buffer> texDimConstantBuffer;
 
         ComPtr<ID3D11Texture2D> latestBackingFrame = nullptr;
         std::vector<BackingFrameUAVs> backingFrameUavs;
+        void updateBackingFrame(DX11State& dx11State, ID3D11Texture2D* newBackingFrame);
 
         void readFrame(DX11State& dx11State);
 
