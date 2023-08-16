@@ -14,7 +14,7 @@
 
 RWTexture2DArray<uint> ySource: t0;
 RWTexture2DArray<uint2> uvSource: t1;
-RWTexture2D<float4> labDst : t2;
+RWTexture2D<float4> rgbDst : t2;
 
 cbuffer CONSTANTS: register(b0) {
 	uint2 texDims;
@@ -29,9 +29,9 @@ void main(uint3 DTid : SV_DispatchThreadID) {
 		uint2 uv = uvSource.Load(uint4(DTid.x / 2, DTid.y / 2, 0, 0)) >> 6;
 
 		float3 linear_rgb = yuv_rec2020_10bit_to_linear_rgb(y, uv);
-		float3 xyz = linear_rgb_to_xyz(linear_rgb);
-		float3 lab = xyz_to_cielab(xyz);
 
-		labDst[DTid.xy] = float4(lab, 1.0);
+		rgbDst[DTid.xy] = float4(linear_rgb, 1.0);
+		//rgbDst[DTid.xy] = float4(y, uv.x, uv.y, 1.0);
 	}
+
 }

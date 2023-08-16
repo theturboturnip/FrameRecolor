@@ -37,12 +37,18 @@ float rec2020_linearize(float e_prime) {
 	}
 }
 
-float3 yuv_rec2020_to_linear_rgb(float y_prime, float2 crcb) {
+float3 yuv_rec2020_10bit_to_linear_rgb(uint y_enc, uint2 crcb_enc) {
 	// u = 2x/(6y - x + 1.5)
 	// v = 3y/(6y - x + 1.5)
 	// u/v = 2x/3y
-	// 
-
+	
+	// Assume y, cr, cb are 10bit i.e. uints from [0, 1024)
+	// Y is coded as int[((219 * Y) + 16) * 2^n-8]
+	// assuming n=10 for 10bits? then 
+	float y_prime = ((y_enc / 4.0) - 16.0) / 219.0;
+	// Cr, Cb are encoded as int[((224 * C) + 128) * 2^n-8]
+	float cr = ((crcb_enc.y / 4.0) - 128.0) / 224.0;
+	float cb = ((crcb_enc.x / 4.0) - 128.0) / 224.0;
 
 	// From the recommendation specs:
 	// https://www.itu.int/dms_pubrec/itu-r/rec/bt/R-REC-BT.2020-2-201510-I!!PDF-E.pdf
@@ -53,14 +59,15 @@ float3 yuv_rec2020_to_linear_rgb(float y_prime, float2 crcb) {
 	// C'B = (B' - Y')/1.8814
 	//     => B' = (1.8814C'B) + Y'
 
-	float r_prime = (1.4746 * crcb.x) + y_prime;
-	float b_prime = (1.8814 * crcb.y) + y_prime;
+	float r_prime = (1.4746 * cr) + y_prime;
+	float b_prime = (1.8814 * cb) + y_prime;
 	float g_prime = (y_prime - 0.2627 * r_prime - 0.0593 * b_prime) / 0.6780;
 
 	return float3(
 		rec2020_linearize(r_prime),
 		rec2020_linearize(g_prime),
 		rec2020_linearize(b_prime)
+		//r_prime, g_prime, b_prime
 	);
 }
 

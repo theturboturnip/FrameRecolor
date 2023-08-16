@@ -59,6 +59,7 @@ namespace RTR {
         ComPtr<ID3D11ComputeShader> yuv_bt601_to_rgb_comp;
         ComPtr<ID3D11PixelShader> rgb_frag;
         ComPtr<ID3D11ComputeShader> yuv_rec2020_to_cielab_comp;
+        ComPtr<ID3D11ComputeShader> yuv_rec2020_to_lin_rgb_comp;
 
         ComPtr<ID3D11Buffer> quadVertexBuffer;
         ComPtr<ID3D11Buffer> quadIndexBuffer;

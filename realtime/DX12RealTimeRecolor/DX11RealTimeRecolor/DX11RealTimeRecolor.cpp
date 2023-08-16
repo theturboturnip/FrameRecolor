@@ -330,6 +330,7 @@ DX11State dx11_init() {
         .yuv_bt601_to_rgb_comp = dx11_compile_compute_shader(device, L"yuv_bt601_to_rgb_comp.cso"),
         .rgb_frag = dx11_compile_pixel_shader(device, L"rgb_frag.cso"),
         .yuv_rec2020_to_cielab_comp = dx11_compile_compute_shader(device, L"yuv_rec2020_to_cielab_comp.cso"),
+        .yuv_rec2020_to_lin_rgb_comp = dx11_compile_compute_shader(device, L"yuv_rec2020_to_lin_rgb_comp.cso"),
 
         .quadVertexBuffer = quadVertexBuffer,
         .quadIndexBuffer = quadIndexBuffer,
@@ -532,16 +533,6 @@ FFMpegPerVideoState ffmpeg_create_decoder(DX11State& dx11State, const char* path
         .back = 1
     };
 
-    //UINT Width;
-    //UINT Height;
-    //UINT MipLevels;
-    //UINT ArraySize;
-    //DXGI_FORMAT Format;
-    //DXGI_SAMPLE_DESC SampleDesc;
-    //D3D11_USAGE Usage;
-    //UINT BindFlags;
-    //UINT CPUAccessFlags;
-    //UINT MiscFlags;
     auto frameRgbDesc = D3D11_TEXTURE2D_DESC{
         .Width = state.stats.content_width,
         .Height = state.stats.content_height,
@@ -600,7 +591,7 @@ void FFMpegPerVideoState::updateBackingFrame(DX11State& dx11State, ID3D11Texture
             auto uavs = BackingFrameUAVs{};
 
             auto uavLumDesc = D3D11_UNORDERED_ACCESS_VIEW_DESC{
-                .Format = DXGI_FORMAT_R8_UNORM,
+                .Format = DXGI_FORMAT_R8_UINT,
                 .ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2DARRAY,
                 .Texture2DArray = {
                     .MipSlice = 0,
@@ -609,7 +600,7 @@ void FFMpegPerVideoState::updateBackingFrame(DX11State& dx11State, ID3D11Texture
                 }
             };
             auto uavChromDesc = D3D11_UNORDERED_ACCESS_VIEW_DESC{
-                .Format = DXGI_FORMAT_R8G8_UNORM,
+                .Format = DXGI_FORMAT_R8G8_UINT,
                 .ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2DARRAY,
                 .Texture2DArray = {
                     .MipSlice = 0,
@@ -619,8 +610,8 @@ void FFMpegPerVideoState::updateBackingFrame(DX11State& dx11State, ID3D11Texture
             };
 
             if (desc.Format == DXGI_FORMAT_P010) {
-                uavLumDesc.Format = DXGI_FORMAT_R16_UNORM;
-                uavChromDesc.Format = DXGI_FORMAT_R16G16_UNORM;
+                uavLumDesc.Format = DXGI_FORMAT_R16_UINT;
+                uavChromDesc.Format = DXGI_FORMAT_R16G16_UINT;
             }
 
             ThrowIfFailed(dx11State.device->CreateUnorderedAccessView(newBackingFrame, &uavLumDesc, &uavs.lum));
@@ -651,7 +642,22 @@ void FFMpegPerVideoState::readFrame(DX11State& dx11State) {
         };
         dx11_write_buffer(dx11State.deviceContext, texDimConstantBuffer, &buf, sizeof(buf));
 
-        dx11State.deviceContext->CSSetShader(dx11State.yuv_bt601_to_rgb_comp.Get(), nullptr, 0);
+        switch (decoder_ctx->colorspace) {
+        case AVCOL_SPC_BT709:
+            // TODO 709 and 601 are different!!!
+        case AVCOL_SPC_BT470BG:
+        case AVCOL_SPC_SMPTE170M: // these are both 601
+        case AVCOL_SPC_SMPTE240M: // TODO this has a different white point but it's close enough for now
+            dx11State.deviceContext->CSSetShader(dx11State.yuv_bt601_to_rgb_comp.Get(), nullptr, 0);
+            break;
+        case AVCOL_SPC_BT2020_CL:
+        case AVCOL_SPC_BT2020_NCL:
+            // TODO CL/NCL are slightly different!!
+            dx11State.deviceContext->CSSetShader(dx11State.yuv_rec2020_to_lin_rgb_comp.Get(), nullptr, 0);
+            break;
+        default:
+            assert(false && "don't know how to translate colorspace to rgb");
+        }
         ID3D11UnorderedAccessView* uavs[] = {
             backingFrameUavs[texture_index].lum.Get(),
             backingFrameUavs[texture_index].chrom.Get(),
@@ -662,10 +668,10 @@ void FFMpegPerVideoState::readFrame(DX11State& dx11State) {
         dx11State.deviceContext->CSSetConstantBuffers(0, 1, &cbuf);
         dx11State.deviceContext->Dispatch(buf.texDims.x, buf.texDims.y, 1);
 
-        dx11State.deviceContext->CSSetShader(dx11State.yuv_rec2020_to_cielab_comp.Get(), nullptr, 0);
-        uavs[2] = latestFrameAsLabUav.Get();
-        dx11State.deviceContext->CSSetUnorderedAccessViews(0, 3, uavs, nullptr);
-        dx11State.deviceContext->Dispatch(buf.texDims.x, buf.texDims.y, 1);
+        //dx11State.deviceContext->CSSetShader(dx11State.yuv_rec2020_to_cielab_comp.Get(), nullptr, 0);
+        //uavs[2] = latestFrameAsLabUav.Get();
+        //dx11State.deviceContext->CSSetUnorderedAccessViews(0, 3, uavs, nullptr);
+        //dx11State.deviceContext->Dispatch(buf.texDims.x, buf.texDims.y, 1);
 
         // Unbind resources for other rendering to use
         uavs[0] = nullptr;

@@ -12,8 +12,8 @@
 //
 //*********************************************************
 
-RWTexture2DArray<unorm float> ySource: t0;
-RWTexture2DArray<unorm float2> uvSource: t1;
+RWTexture2DArray<uint> ySource: t0;
+RWTexture2DArray<uint2> uvSource: t1;
 RWTexture2D<float4> rgb : t2;
 
 cbuffer CONSTANTS: register(b0) {
@@ -25,8 +25,8 @@ cbuffer CONSTANTS: register(b0) {
 [numthreads(1, 1, 1)]
 void main(uint3 DTid : SV_DispatchThreadID) {
 	if (all(DTid.xy < texDims)) {
-		float y = ySource.Load(uint4(DTid.x, DTid.y, 0, 0));
-		float2 uv = uvSource.Load(uint4(DTid.x / 2, DTid.y / 2, 0, 0));
+		float y = ySource.Load(uint4(DTid.x, DTid.y, 0, 0)) / 255.0;
+		float2 uv = uvSource.Load(uint4(DTid.x / 2, DTid.y / 2, 0, 0)) / 255.0;
 		rgb[DTid.xy] = float4(yuv_bt601_to_rgb(float3(y, uv.x, uv.y)), 1.f);
 	}
 }
