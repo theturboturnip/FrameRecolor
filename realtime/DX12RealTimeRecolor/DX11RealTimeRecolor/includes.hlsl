@@ -8,7 +8,8 @@ static const float3x3 YUVtoRGBCoeffMatrix =
 	1.596027f, -0.812968f, 0.000000f
 };
 
-float3 yuv_bt601_to_rgb(float3 yuv)
+// TODO the color primaries for bt601 are slightly different than for srgb, but who's counting
+float3 yuv_bt601_to_srgb(float3 yuv)
 {
 	// Derived from https://msdn.microsoft.com/en-us/library/windows/desktop/dd206750(v=vs.85).aspx
 	// Section: Converting 8-bit YUV to RGB888

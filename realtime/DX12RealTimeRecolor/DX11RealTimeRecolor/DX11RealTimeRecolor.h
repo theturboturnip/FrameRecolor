@@ -55,8 +55,8 @@ namespace RTR {
 
         ComPtr<ID3D11VertexShader> posuv_vert;
         ComPtr<ID3D11InputLayout> posuv_inputlayout;
-        ComPtr<ID3D11PixelShader> yuv_bt601_to_rgb_frag;
-        ComPtr<ID3D11ComputeShader> yuv_bt601_to_rgb_comp;
+        ComPtr<ID3D11PixelShader> yuv_bt601_to_srgb_frag;
+        ComPtr<ID3D11ComputeShader> yuv_bt601_to_srgb_comp;
         ComPtr<ID3D11PixelShader> rgb_frag;
         ComPtr<ID3D11ComputeShader> yuv_rec2020_to_cielab_comp;
         ComPtr<ID3D11ComputeShader> yuv_rec2020_to_lin_rgb_comp;
@@ -78,6 +78,13 @@ namespace RTR {
         u32 content_width, content_height;
         u32 surface_width, surface_height;
         u32 num_surfaces;
+    };
+
+    struct DecodedVideoFrame {
+        AVColorSpace colorSpace;
+        ComPtr<ID3D11UnorderedAccessView> lum;
+        ComPtr<ID3D11UnorderedAccessView> chrom;
+        u32 content_width, content_height;
     };
 
     struct FFMpegPerVideoState {

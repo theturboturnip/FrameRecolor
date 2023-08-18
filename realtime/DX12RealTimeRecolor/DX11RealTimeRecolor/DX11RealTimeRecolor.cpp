@@ -317,7 +317,7 @@ DX11State dx11_init() {
     };
     auto posuv_vert = dx11_compile_vertex_shader(device, L"posuv_vert.cso", ied, 2);
 
-    return DX11State{
+    return DX11State {
         .swapchain = swapchain,
         .device = device,
         .deviceContext = deviceContext,
@@ -326,8 +326,8 @@ DX11State dx11_init() {
 
         .posuv_vert = posuv_vert.shader,
         .posuv_inputlayout = posuv_vert.inputLayout,
-        .yuv_bt601_to_rgb_frag = dx11_compile_pixel_shader(device, L"yuv_bt601_to_rgb_frag.cso"),
-        .yuv_bt601_to_rgb_comp = dx11_compile_compute_shader(device, L"yuv_bt601_to_rgb_comp.cso"),
+        .yuv_bt601_to_srgb_frag = dx11_compile_pixel_shader(device, L"yuv_bt601_to_srgb_frag.cso"),
+        .yuv_bt601_to_srgb_comp = dx11_compile_compute_shader(device, L"yuv_bt601_to_srgb_comp.cso"),
         .rgb_frag = dx11_compile_pixel_shader(device, L"rgb_frag.cso"),
         .yuv_rec2020_to_cielab_comp = dx11_compile_compute_shader(device, L"yuv_rec2020_to_cielab_comp.cso"),
         .yuv_rec2020_to_lin_rgb_comp = dx11_compile_compute_shader(device, L"yuv_rec2020_to_lin_rgb_comp.cso"),
@@ -389,8 +389,8 @@ void DX11State::flushAndClose() {
 
     yuv_rec2020_to_cielab_comp.Reset();
     rgb_frag.Reset();
-    yuv_bt601_to_rgb_comp.Reset();
-    yuv_bt601_to_rgb_frag.Reset();
+    yuv_bt601_to_srgb_comp.Reset();
+    yuv_bt601_to_srgb_frag.Reset();
     posuv_inputlayout.Reset();
     posuv_vert.Reset();
 
@@ -648,7 +648,7 @@ void FFMpegPerVideoState::readFrame(DX11State& dx11State) {
         case AVCOL_SPC_BT470BG:
         case AVCOL_SPC_SMPTE170M: // these are both 601
         case AVCOL_SPC_SMPTE240M: // TODO this has a different white point but it's close enough for now
-            dx11State.deviceContext->CSSetShader(dx11State.yuv_bt601_to_rgb_comp.Get(), nullptr, 0);
+            dx11State.deviceContext->CSSetShader(dx11State.yuv_bt601_to_srgb_comp.Get(), nullptr, 0);
             break;
         case AVCOL_SPC_BT2020_CL:
         case AVCOL_SPC_BT2020_NCL:

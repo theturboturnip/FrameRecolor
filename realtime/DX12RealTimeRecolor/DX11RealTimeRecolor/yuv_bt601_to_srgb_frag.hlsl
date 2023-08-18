@@ -12,21 +12,27 @@
 //
 //*********************************************************
 
-RWTexture2DArray<uint> ySource: t0;
-RWTexture2DArray<uint2> uvSource: t1;
-RWTexture2D<float4> rgb : t2;
+// Per-pixel color data passed through the pixel shader.
+struct PixelShaderInput
+{
+	float4 pos         : SV_POSITION;
+	float2 texCoord    : TEXCOORD0;
+};
 
-cbuffer CONSTANTS: register(b0) {
-	uint2 texDims;
-}
+Texture2D<float>  luminanceChannel   : t0;
+Texture2D<float2> chrominanceChannel : t1;
+SamplerState      defaultSampler {
+	Filter = MIN_MAG_MIP_POINT;
+	AddressU = Wrap;
+	AddressV = Wrap;
+};
 
 #include "includes.hlsl"
 
-[numthreads(1, 1, 1)]
-void main(uint3 DTid : SV_DispatchThreadID) {
-	if (all(DTid.xy < texDims)) {
-		float y = ySource.Load(uint4(DTid.x, DTid.y, 0, 0)) / 255.0;
-		float2 uv = uvSource.Load(uint4(DTid.x / 2, DTid.y / 2, 0, 0)) / 255.0;
-		rgb[DTid.xy] = float4(yuv_bt601_to_rgb(float3(y, uv.x, uv.y)), 1.f);
-	}
+min16float4 main(PixelShaderInput input) : SV_TARGET
+{
+	float y = luminanceChannel.Sample(defaultSampler, input.texCoord);
+	float2 uv = chrominanceChannel.Sample(defaultSampler, input.texCoord);
+
+	return min16float4(yuv_bt601_to_srgb(float3(y, uv)), 1.f);
 }
